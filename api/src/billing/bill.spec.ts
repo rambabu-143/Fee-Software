@@ -18,6 +18,7 @@ const base: BillInput = {
   optionalHeadIds: [],
   payments: [],
   concessions: [],
+  fineOverrides: [],
   facilityLines: [],
   asOf: d('2026-04-01'),
 };
@@ -59,6 +60,23 @@ describe('calculateBill', () => {
     expect(late.installments[0]).toMatchObject({ fineDays: 3, fine: 3000, due: 503000 });
     expect(late.installments[1]).toMatchObject({ fineDays: 0, fine: 0 });
     expect(calculateBill({ ...base, asOf: d('2026-04-20') }).installments[0].fineDays).toBe(1);
+  });
+
+  it('a fine override replaces the calculated fine; zero waives it', () => {
+    const asOf = d('2026-04-22'); // 3 fine days = 30.00 calculated
+    const fixed = calculateBill({ ...base, asOf, fineOverrides: [{ installmentId: 1, amount: 5000 }] });
+    expect(fixed.installments[0]).toMatchObject({ fine: 5000, fineOverridden: true, due: 505000 });
+    const waived = calculateBill({ ...base, asOf, fineOverrides: [{ installmentId: 1, amount: 0 }] });
+    expect(waived.installments[0]).toMatchObject({ fine: 0, fineDue: 0, due: 500000 });
+    expect(waived.installments[1].fineOverridden).toBe(false); // other installments untouched
+    expect(calculateBill({ ...base, asOf }).installments[0]).toMatchObject({ fine: 3000, fineOverridden: false });
+    // fine already paid beyond the override is credited to the charges, not lost
+    const paid = calculateBill({ ...base, asOf, payments: [pay(1, '2026-04-22', 499000, 3000)], fineOverrides: [{ installmentId: 1, amount: 1000 }] });
+    expect(paid.installments[0]).toMatchObject({ fineDue: 0, chargesDue: 0, due: 0 });
+    const waivedAfterFinePaid = calculateBill({ ...base, asOf, payments: [pay(1, '2026-04-22', 0, 3000)], fineOverrides: [{ installmentId: 1, amount: 0 }] });
+    expect(waivedAfterFinePaid.installments[0]).toMatchObject({ fineDue: 0, chargesDue: 497000, due: 497000 });
+    const t = waivedAfterFinePaid.totals;
+    expect(t.charges + t.fine - t.paid).toBe(t.due); // books still balance
   });
 
   it('paying before the fine date means no fine; fine freezes on the day charges are cleared', () => {

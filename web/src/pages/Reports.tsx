@@ -21,14 +21,30 @@ export default function Reports() {
   const [asOf, setAsOf] = useState(today())
   const [rows, setRows] = useState<Due[]>([])
   const [standardId, setStandardId] = useState<number>()
+  const [sectionId, setSectionId] = useState<number>()
+  const [installmentId, setInstallmentId] = useState<number>()
+  const [installments, setInstallments] = useState<{ id: number; label: string }[]>([])
+  const [sections, setSections] = useState<{ value: number; label: string }[]>([])
   const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (!schoolId || !yearId) return
+    Promise.all([
+      api<{ id: number; label: string }[]>(`/installments?schoolId=${schoolId}&yearId=${yearId}`),
+      api<{ name: string; sections: { id: number; name: string }[] }[]>(`/standards?schoolId=${schoolId}`),
+    ]).then(([i, s]) => {
+      setInstallments(i)
+      setSections(s.flatMap((x) => x.sections.map((sec) => ({ value: sec.id, label: `${x.name} ${sec.name}` }))))
+    }).catch((e) => message.error(e.message))
+  }, [schoolId, yearId])
 
   useEffect(() => {
     if (!schoolId || !yearId || !asOf) return
     setLoading(true)
-    api<Due[]>(`/reports/dues?schoolId=${schoolId}&yearId=${yearId}&asOf=${asOf}`)
+    const extra = `${sectionId ? `&sectionId=${sectionId}` : ''}${installmentId ? `&installmentId=${installmentId}` : ''}`
+    api<Due[]>(`/reports/dues?schoolId=${schoolId}&yearId=${yearId}&asOf=${asOf}${extra}`)
       .then(setRows).catch((e) => message.error(e.message)).finally(() => setLoading(false))
-  }, [schoolId, yearId, asOf])
+  }, [schoolId, yearId, asOf, sectionId, installmentId])
 
   const classes = useMemo(() => {
     const m = new Map<number, Due[]>()
@@ -56,6 +72,9 @@ export default function Reports() {
               {dateInput}
               <Select allowClear placeholder="All classes" style={{ width: 160 }} value={standardId} onChange={setStandardId}
                 options={classes.map((c) => ({ value: c.standardId, label: c.standard }))} />
+              <Select allowClear showSearch optionFilterProp="label" placeholder="All sections" style={{ width: 160 }} value={sectionId} onChange={setSectionId} options={sections} />
+              <Select allowClear placeholder="All installments" style={{ width: 170 }} value={installmentId} onChange={setInstallmentId}
+                options={installments.map((i) => ({ value: i.id, label: i.label }))} />
               <span>{defaulters.length} students · overdue <b>{money(sum(defaulters, (r) => r.overdue))}</b></span>
               <Button onClick={() => downloadCsv(`defaulters-${asOf}`, ['Adm. no.', 'Name', 'Class', 'Overdue', 'Fine', 'Total due', 'Active'],
                 defaulters.map((r) => [r.admissionNo, r.name, r.className, r.overdue, r.fine, r.due, r.active ? 'yes' : 'no']))}>CSV</Button>

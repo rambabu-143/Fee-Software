@@ -14,6 +14,8 @@ export type BillInput = {
   concessions: { feeHeadId: number; percent: number | null; amount: number | null; reason: string }[];
   // Transport/hostel: a flat amount per installment for whichever routes/rooms the student is on.
   // No concessions apply to these (feeHeadId is negative so the concession lookup never matches).
+  // Fixed fine (paise) replacing the computed one for that installment; 0 waives it.
+  fineOverrides: { installmentId: number; amount: number }[];
   facilityLines: { facilityId: number; name: string; installmentId: number; amount: number }[];
   asOf: Date;
 };
@@ -28,6 +30,7 @@ export type InstallmentBill = {
   charges: number;
   fine: number;
   fineDays: number;
+  fineOverridden: boolean;
   chargesDue: number;
   fineDue: number;
   paid: number;
@@ -94,8 +97,10 @@ export function calculateBill(input: BillInput) {
         const start = utcDay(inst.fineStartDate);
         if (end >= start) fineDays = (end - start) / DAY + 1;
       }
-      const fine = fineDays * inst.finePerDay;
-      const chargesDue = Math.max(0, charges - chargesPaid);
+      const override = input.fineOverrides.find((o) => o.installmentId === inst.id);
+      const fine = override ? override.amount : fineDays * inst.finePerDay;
+      // A fine override can drop below what was already paid as fine; that surplus counts toward the charges.
+      const chargesDue = Math.max(0, charges - chargesPaid - Math.max(0, finePaid - fine));
       const fineDue = Math.max(0, fine - finePaid);
 
       return {
@@ -107,6 +112,7 @@ export function calculateBill(input: BillInput) {
         charges,
         fine,
         fineDays,
+        fineOverridden: !!override,
         chargesDue,
         fineDue,
         paid: chargesPaid + finePaid,

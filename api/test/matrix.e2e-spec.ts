@@ -149,6 +149,7 @@ describe('authn/authz matrix + flows (e2e)', () => {
     { m: 'get', p: `/students/${x.studentId}/bill.pdf?yearId=${x.yearId}` },
     { m: 'get', p: `/students/${x.studentId}/concessions?yearId=${x.yearId}` },
     { m: 'get', p: `/students/${x.studentId}/facilities?yearId=${x.yearId}` },
+    { m: 'get', p: `/students/${x.studentId}/fines?yearId=${x.yearId}` },
     { m: 'get', p: `/payments?${q(x)}` },
     { m: 'get', p: `/payments/${x.paymentId}` },
     { m: 'get', p: `/payments/${x.paymentId}/pdf` },
@@ -180,6 +181,7 @@ describe('authn/authz matrix + flows (e2e)', () => {
     [{ m: 'post', p: '/students', b: { schoolId: x.schoolId, yearId: x.yearId, admissionNo: 'authz-1', name: 'n', sectionId: x.sectionId, isNewAdmission: false, optionalHeadIds: [] } }, ['ADMIN', 'ACCOUNTANT']],
     [{ m: 'patch', p: `/students/${x.studentId}`, b: { yearId: x.yearId, name: 'Same' } }, ['ADMIN', 'ACCOUNTANT']],
     [{ m: 'put', p: `/students/${x.studentId}/concessions`, b: { yearId: x.yearId, items: [] } }, ['ADMIN']],
+    [{ m: 'put', p: `/students/${x.studentId}/fines`, b: { yearId: x.yearId, items: [] } }, ['ADMIN']],
     [{ m: 'put', p: `/students/${x.studentId}/facilities`, b: { yearId: x.yearId, kind: 'TRANSPORT' } }, ['ADMIN', 'ACCOUNTANT']],
     [{ m: 'post', p: '/promotions', b: { fromYearId: x.yearId, toYearId: x.yearId, fromSectionId: x.sectionId, toSectionId: x.section2Id, excludeStudentIds: [] } }, ['ADMIN', 'ACCOUNTANT']],
     [{ m: 'post', p: '/payments', b: { studentId: x.studentId, yearId: x.yearId, amount: 99999999, mode: 'CASH' } }, ['ADMIN', 'ACCOUNTANT']],
@@ -531,6 +533,75 @@ describe('authn/authz matrix + flows (e2e)', () => {
       expect(Number(past.totals.fine)).toBe(0);
       expect(Number(bill.totals.fine)).toBeGreaterThanOrEqual(0);
       expect(Number(bill.totals.due)).toBeGreaterThanOrEqual(Number(past.totals.due));
+    });
+
+    it('fine override: waive/fix a fine per installment, validation, authz, bill and payments follow', async () => {
+      const sid = a.studentId;
+      const asOf = '2030-01-01';
+      const billAt = async () => (await call('admin1', { m: 'get', p: `/students/${sid}/bill?yearId=${a.yearId}&asOf=${asOf}` })).body;
+      const before = await billAt();
+      const late = before.installments.find((i: { fineDays: number }) => i.fineDays > 0);
+      expect(late, 'seed needs an installment with a fine so overrides can be tested').toBeDefined();
+      const fine0 = Number(late.fine);
+      expect(fine0).toBeGreaterThan(0);
+      const put = (items: object[], who = 'admin1') => call(who, { m: 'put', p: `/students/${sid}/fines`, b: { yearId: a.yearId, items } });
+
+      expect((await put([{ installmentId: late.installmentId, amount: 0, remarks: 'waived by principal' }])).status).toBe(200);
+      const waived = await billAt();
+      const w = waived.installments.find((i: { installmentId: number }) => i.installmentId === late.installmentId);
+      expect(w).toMatchObject({ fine: '0.00', fineOverridden: true });
+      expect(Number(waived.totals.due)).toBeCloseTo(Number(before.totals.due) - fine0, 2);
+      expect((await call('viewer1', { m: 'get', p: `/students/${sid}/fines?yearId=${a.yearId}` })).body)
+        .toEqual([{ installmentId: late.installmentId, amount: '0.00', remarks: 'waived by principal' }]);
+
+      expect((await put([{ installmentId: late.installmentId, amount: 12.5, remarks: 'fixed fine' }])).status).toBe(200);
+      expect((await billAt()).installments.find((i: { installmentId: number }) => i.installmentId === late.installmentId).fine).toBe('12.50');
+
+      // validation + authz
+      expect((await put([{ installmentId: late.installmentId, amount: -1, remarks: 'neg' }])).status).toBe(400);
+      expect((await put([{ installmentId: late.installmentId, amount: 1.234, remarks: 'dp' }])).status).toBe(400);
+      expect((await put([{ installmentId: late.installmentId, amount: 1, remarks: 'x' }])).status).toBe(400);
+      expect((await put([{ installmentId: late.installmentId, amount: 1, remarks: 'dup' }, { installmentId: late.installmentId, amount: 2, remarks: 'dup' }])).status).toBe(400);
+      expect((await put([{ installmentId: b.instId, amount: 1, remarks: 'foreign' }])).status).toBe(400);
+      expect((await put([{ installmentId: 999999, amount: 1, remarks: 'unknown' }])).status).toBe(400);
+      expect((await put([{ installmentId: late.installmentId, amount: 1, remarks: 'nope' }], 'accountant1')).status).toBe(403);
+      expect((await put([{ installmentId: late.installmentId, amount: 1, remarks: 'nope' }], 'admin2')).status).toBe(403);
+      expect((await call('admin1', { m: 'put', p: `/students/${sid}/fines`, b: { yearId: a.yearId, items: [], extra: 1 } })).status).toBe(400);
+      expect((await billAt()).installments.find((i: { installmentId: number }) => i.installmentId === late.installmentId).fine).toBe('12.50'); // failed puts changed nothing
+
+      // payment follows the overridden bill: due is exactly payable, one paisa more is refused
+      const due = Number((await billAt()).totals.due);
+      const pay = (amount: number) => call('admin1', { m: 'post', p: '/payments', b: { studentId: sid, yearId: a.yearId, amount, mode: 'CASH' } });
+      expect((await pay(due + 0.01)).status).toBe(400); // one paisa over the overridden due is refused
+      expect((await pay(0.01)).status).toBe(201); // payments still work with an override in place
+      await call('admin1', { m: 'post', p: `/payments/${(await call('admin1', { m: 'get', p: `/payments?${q(a)}&studentId=${sid}` })).body[0].id}/cancel`, b: { reason: 'test cleanup' } });
+
+      expect((await put([])).status).toBe(200); // clearing restores the calculated fine
+      expect(Number((await billAt()).totals.due)).toBeCloseTo(Number(before.totals.due), 2);
+      expect(due).toBeGreaterThan(0);
+    });
+
+    it('dues report: sectionId and installmentId filters, validated and school-scoped', async () => {
+      const all = (await call('viewer1', { m: 'get', p: `/reports/dues?${q(a)}&asOf=2030-01-01` })).body as { studentId: number; charges: string; className: string }[];
+      const bySection = (await call('viewer1', { m: 'get', p: `/reports/dues?${q(a)}&asOf=2030-01-01&sectionId=${a.sectionId}` })).body as typeof all;
+      expect(bySection.length).toBeGreaterThan(0);
+      expect(bySection.length).toBeLessThan(all.length);
+      const inSection = (await call('viewer1', { m: 'get', p: `/students?${q(a)}` })).body.filter((s: { enrollment: { sectionId: number } }) => s.enrollment.sectionId === a.sectionId).length;
+      expect(bySection.length).toBe(inSection);
+
+      const one = (await call('viewer1', { m: 'get', p: `/reports/dues?${q(a)}&asOf=2030-01-01&installmentId=${a.instId}` })).body as typeof all;
+      expect(one.length).toBeGreaterThan(0);
+      // per-installment figures are a part of the whole
+      const whole = new Map(all.map((r) => [r.studentId, Number(r.charges)]));
+      for (const r of one) expect(Number(r.charges)).toBeLessThanOrEqual(whole.get(r.studentId)!);
+      expect(one.reduce((s, r) => s + Number(r.charges), 0)).toBeLessThan(all.reduce((s, r) => s + Number(r.charges), 0));
+      // the installment-only overdue never exceeds the whole-year overdue
+      expect(await status('viewer1', { m: 'get', p: `/reports/dues?${q(a)}&sectionId=abc` })).toBe(400);
+      expect(await status('viewer1', { m: 'get', p: `/reports/dues?${q(a)}&installmentId=abc` })).toBe(400);
+      // another school's section/installment yields nothing, never that school's students
+      expect((await call('viewer1', { m: 'get', p: `/reports/dues?${q(a)}&sectionId=${b.sectionId}` })).body).toEqual([]);
+      expect((await call('viewer1', { m: 'get', p: `/reports/dues?${q(a)}&installmentId=${b.instId}` })).body).toEqual([]);
+      expect(await status('viewer2', { m: 'get', p: `/reports/dues?${q(a)}&sectionId=${a.sectionId}` })).toBe(403);
     });
 
     it('reports: dues + collection, scoped, filtered, validated', async () => {

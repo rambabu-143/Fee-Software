@@ -7,6 +7,7 @@ import { useSelection } from '../selection'
 import { BillView, type Bill } from '../bill'
 import { ConcessionsModal } from '../concessions'
 import { FacilitiesModal } from '../facilities'
+import { FinesModal } from '../fines'
 
 type Standard = { id: number; name: string; sections: { id: number; name: string }[] }
 type FeeHead = { id: number; name: string; type: string }
@@ -22,6 +23,7 @@ export default function Students() {
   const optionalHeads = heads.filter((x) => x.type === 'OPTIONAL')
   const [conc, setConc] = useState<Student | null>(null)
   const [fac, setFac] = useState<Student | null>(null)
+  const [fine, setFine] = useState<Student | null>(null)
   const [filter, setFilter] = useState<{ standardId?: number; q: string }>({ q: '' })
   const [editing, setEditing] = useState<Partial<Student> | null>(null)
   const [bill, setBill] = useState<(Bill & { id: number }) | null>(null)
@@ -99,6 +101,7 @@ export default function Students() {
               <Button size="small" onClick={() => showBill(r.id)}>Bill</Button>
               <Button size="small" onClick={() => open(r)}>Edit</Button>
               <Button size="small" onClick={() => setConc(r)}>Concessions</Button>
+              <Button size="small" onClick={() => setFine(r)}>Fines</Button>
               <Button size="small" onClick={() => setFac(r)}>Transport/Hostel</Button>
             </Space>
           ),
@@ -138,6 +141,7 @@ export default function Students() {
         )}
       </Drawer>
       <ConcessionsModal student={conc} yearId={yearId} heads={heads} onClose={() => setConc(null)} />
+      <FinesModal student={fine} schoolId={schoolId} yearId={yearId} onClose={() => setFine(null)} />
       <FacilitiesModal student={fac} schoolId={schoolId} yearId={yearId} onClose={() => setFac(null)} />
     </>
   )

@@ -90,6 +90,7 @@ model Enrollment {
   // OPTIONAL heads (e.g. Computer Fee) apply only if opted in here.
   optionalHeads       FeeHead[]
   concessions         Concession[]
+  fineAdjustments     FineAdjustment[]
   facilityAssignments FacilityAssignment[]
 
   @@unique([studentId, yearId])
@@ -131,6 +132,7 @@ model Installment {
   structures         FeeStructure[]
   allocations        PaymentAllocation[]
   facilityStructures FacilityFeeStructure[]
+  fineAdjustments    FineAdjustment[]
 
   @@unique([schoolId, yearId, number])
 }
@@ -235,6 +237,20 @@ model Concession {
   reason       String
 
   @@unique([enrollmentId, feeHeadId])
+}
+
+// Replaces the computed late fine of one installment for one student-year with a fixed amount
+// (0 = waived). The calculated fine is ignored for that installment while this row exists.
+model FineAdjustment {
+  id            Int         @id @default(autoincrement())
+  enrollmentId  Int
+  enrollment    Enrollment  @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  installmentId Int
+  installment   Installment @relation(fields: [installmentId], references: [id])
+  amount        Decimal     @db.Decimal(12, 2)
+  remarks       String
+
+  @@unique([enrollmentId, installmentId])
 }
 
 enum FacilityKind {

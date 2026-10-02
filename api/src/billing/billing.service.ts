@@ -20,7 +20,7 @@ export class BillingService {
   async buildMany(
     yearId: number,
     asOf: Date,
-    filter: { studentId?: number; schoolId?: number; standardId?: number },
+    filter: { studentId?: number; schoolId?: number; standardId?: number; sectionId?: number },
     db: Db = this.prisma,
   ) {
     const enrollments = await db.enrollment.findMany({
@@ -28,13 +28,16 @@ export class BillingService {
         yearId,
         ...(filter.studentId ? { studentId: filter.studentId } : {}),
         ...(filter.schoolId ? { student: { schoolId: filter.schoolId } } : {}),
-        ...(filter.standardId ? { section: { standardId: filter.standardId } } : {}),
+        ...(filter.standardId || filter.sectionId
+          ? { section: { ...(filter.standardId ? { standardId: filter.standardId } : {}), ...(filter.sectionId ? { id: filter.sectionId } : {}) } }
+          : {}),
       },
       include: {
         student: true,
         section: { include: { standard: true } },
         optionalHeads: { select: { id: true } },
         concessions: true,
+        fineAdjustments: true,
         facilityAssignments: { include: { facility: true } },
       },
     });
@@ -85,6 +88,7 @@ export class BillingService {
           feeHeadId: c.feeHeadId, reason: c.reason,
           percent: c.percent === null ? null : Number(c.percent), amount: c.amount === null ? null : toPaise(c.amount.toFixed(2)),
         })),
+        fineOverrides: e.fineAdjustments.map((f) => ({ installmentId: f.installmentId, amount: toPaise(f.amount.toFixed(2)) })),
         facilityLines: e.facilityAssignments.flatMap((a) =>
           facilityStructure
             .filter((s) => s.facilityId === a.facilityId)
@@ -103,7 +107,7 @@ export class BillingService {
     return {
       student,
       installments: bill.installments.map((i) => ({
-        installmentId: i.installmentId, number: i.number, label: i.label, dueDate: i.dueDate, fineDays: i.fineDays,
+        installmentId: i.installmentId, number: i.number, label: i.label, dueDate: i.dueDate, fineDays: i.fineDays, fineOverridden: i.fineOverridden,
         lines: i.lines.map((l) => ({ ...l, amount: m(l.amount) })),
         charges: m(i.charges), fine: m(i.fine), paid: m(i.paid), due: m(i.due),
       })),
