@@ -1,0 +1,284 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// A school or branch. Everything else hangs off this.
+model School {
+  id           Int           @id @default(autoincrement())
+  code         String        @unique
+  name         String
+  standards    Standard[]
+  feeHeads     FeeHead[]
+  installments Installment[]
+  students     Student[]
+  users        User[]
+  payments     Payment[]
+  facilities   Facility[]
+}
+
+// "2026-27". Fee rules are rows keyed by year, not a new source file per year.
+model AcademicYear {
+  id                 Int                    @id @default(autoincrement())
+  label              String                 @unique
+  startDate          DateTime               @db.Date
+  endDate            DateTime               @db.Date
+  isCurrent          Boolean                @default(false)
+  installments       Installment[]
+  structures         FeeStructure[]
+  enrollments        Enrollment[]
+  payments           Payment[]
+  facilityStructures FacilityFeeStructure[]
+}
+
+model Standard {
+  id         Int            @id @default(autoincrement())
+  schoolId   Int
+  school     School         @relation(fields: [schoolId], references: [id])
+  name       String
+  sortOrder  Int
+  sections   Section[]
+  structures FeeStructure[]
+
+  @@unique([schoolId, name])
+}
+
+model Section {
+  id          Int          @id @default(autoincrement())
+  standardId  Int
+  standard    Standard     @relation(fields: [standardId], references: [id])
+  name        String
+  enrollments Enrollment[]
+
+  @@unique([standardId, name])
+}
+
+model Student {
+  id          Int          @id @default(autoincrement())
+  schoolId    Int
+  school      School       @relation(fields: [schoolId], references: [id])
+  admissionNo String
+  name        String
+  dob         DateTime?    @db.Date
+  fatherName  String?
+  motherName  String?
+  phone       String?
+  email       String?
+  active      Boolean      @default(true)
+  enrollments Enrollment[]
+  payments    Payment[]
+
+  @@unique([schoolId, admissionNo])
+}
+
+// Which class/section a student is in for a given year. Promotion = new row.
+model Enrollment {
+  id                  Int                  @id @default(autoincrement())
+  studentId           Int
+  student             Student              @relation(fields: [studentId], references: [id])
+  yearId              Int
+  year                AcademicYear         @relation(fields: [yearId], references: [id])
+  sectionId           Int
+  section             Section              @relation(fields: [sectionId], references: [id])
+  rollNo              Int?
+  // New admissions pay ADMISSION and REFUNDABLE heads; continuing students don't.
+  isNewAdmission      Boolean              @default(false)
+  // OPTIONAL heads (e.g. Computer Fee) apply only if opted in here.
+  optionalHeads       FeeHead[]
+  concessions         Concession[]
+  facilityAssignments FacilityAssignment[]
+
+  @@unique([studentId, yearId])
+}
+
+enum FeeHeadType {
+  ADMISSION
+  ANNUAL
+  MONTHLY
+  REFUNDABLE
+  OPTIONAL
+}
+
+model FeeHead {
+  id          Int            @id @default(autoincrement())
+  schoolId    Int
+  school      School         @relation(fields: [schoolId], references: [id])
+  name        String
+  type        FeeHeadType
+  structures  FeeStructure[]
+  optedBy     Enrollment[]
+  concessions Concession[]
+
+  @@unique([schoolId, name])
+}
+
+model Installment {
+  id                 Int                    @id @default(autoincrement())
+  schoolId           Int
+  school             School                 @relation(fields: [schoolId], references: [id])
+  yearId             Int
+  year               AcademicYear           @relation(fields: [yearId], references: [id])
+  number             Int
+  label              String
+  dueDate            DateTime               @db.Date
+  fineStartDate      DateTime?              @db.Date
+  // Flat late fine per day from fineStartDate while the installment is unpaid.
+  finePerDay         Decimal                @default(0) @db.Decimal(10, 2)
+  structures         FeeStructure[]
+  allocations        PaymentAllocation[]
+  facilityStructures FacilityFeeStructure[]
+
+  @@unique([schoolId, yearId, number])
+}
+
+// The fee "config": amount of a head, for a class, in an installment, in a year.
+model FeeStructure {
+  id            Int          @id @default(autoincrement())
+  yearId        Int
+  year          AcademicYear @relation(fields: [yearId], references: [id])
+  standardId    Int
+  standard      Standard     @relation(fields: [standardId], references: [id])
+  feeHeadId     Int
+  feeHead       FeeHead      @relation(fields: [feeHeadId], references: [id])
+  installmentId Int
+  installment   Installment  @relation(fields: [installmentId], references: [id])
+  amount        Decimal      @db.Decimal(12, 2)
+
+  @@unique([yearId, standardId, feeHeadId, installmentId])
+}
+
+enum Role {
+  SUPERADMIN
+  ADMIN
+  ACCOUNTANT
+  VIEWER
+}
+
+model User {
+  id           Int     @id @default(autoincrement())
+  username     String  @unique
+  passwordHash String
+  role         Role
+  // null = access to all schools (superadmin)
+  schoolId     Int?
+  school       School? @relation(fields: [schoolId], references: [id])
+  active       Boolean @default(true)
+}
+
+enum PaymentMode {
+  CASH
+  CHEQUE
+  UPI
+  BANK_TRANSFER
+  CARD
+}
+
+// One receipt. Never deleted: cancelled receipts keep their number and stop counting.
+model Payment {
+  id           Int                 @id @default(autoincrement())
+  schoolId     Int
+  school       School              @relation(fields: [schoolId], references: [id])
+  yearId       Int
+  year         AcademicYear        @relation(fields: [yearId], references: [id])
+  studentId    Int
+  student      Student             @relation(fields: [studentId], references: [id])
+  receiptNo    Int
+  date         DateTime            @db.Date
+  mode         PaymentMode
+  reference    String?
+  remarks      String?
+  amount       Decimal             @db.Decimal(12, 2)
+  createdBy    String
+  createdAt    DateTime            @default(now())
+  cancelledAt  DateTime?
+  cancelledBy  String?
+  cancelReason String?
+  allocations  PaymentAllocation[]
+
+  @@unique([schoolId, yearId, receiptNo])
+  @@index([studentId, yearId])
+}
+
+// How a receipt's amount was split across installments.
+model PaymentAllocation {
+  id            Int         @id @default(autoincrement())
+  paymentId     Int
+  payment       Payment     @relation(fields: [paymentId], references: [id])
+  installmentId Int
+  installment   Installment @relation(fields: [installmentId], references: [id])
+  charges       Decimal     @db.Decimal(12, 2)
+  fine          Decimal     @db.Decimal(12, 2)
+}
+
+model ReceiptCounter {
+  schoolId Int
+  yearId   Int
+  last     Int
+
+  @@id([schoolId, yearId])
+}
+
+// Discount on one fee head for one student-year, applied to every installment of that head.
+// Exactly one of percent / amount (per installment); enforced by a CHECK in the migration.
+model Concession {
+  id           Int        @id @default(autoincrement())
+  enrollmentId Int
+  enrollment   Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  feeHeadId    Int
+  feeHead      FeeHead    @relation(fields: [feeHeadId], references: [id])
+  percent      Decimal?   @db.Decimal(5, 2)
+  amount       Decimal?   @db.Decimal(12, 2)
+  reason       String
+
+  @@unique([enrollmentId, feeHeadId])
+}
+
+enum FacilityKind {
+  TRANSPORT
+  HOSTEL
+}
+
+// A transport route or hostel room a school offers. Same shape for both kinds,
+// so one set of models/screens covers both instead of duplicating them.
+model Facility {
+  id          Int                    @id @default(autoincrement())
+  schoolId    Int
+  school      School                 @relation(fields: [schoolId], references: [id])
+  kind        FacilityKind
+  name        String
+  structures  FacilityFeeStructure[]
+  assignments FacilityAssignment[]
+
+  @@unique([schoolId, kind, name])
+}
+
+// Fee grid for one facility: amount per installment, per year.
+model FacilityFeeStructure {
+  id            Int          @id @default(autoincrement())
+  yearId        Int
+  year          AcademicYear @relation(fields: [yearId], references: [id])
+  facilityId    Int
+  facility      Facility     @relation(fields: [facilityId], references: [id])
+  installmentId Int
+  installment   Installment  @relation(fields: [installmentId], references: [id])
+  amount        Decimal      @db.Decimal(12, 2)
+
+  @@unique([yearId, facilityId, installmentId])
+}
+
+// Which route/room a student is on for a year. At most one per kind per
+// enrollment; enforced in the controller (delete-then-create), not here,
+// since a DB constraint would need a generated "kind" column.
+model FacilityAssignment {
+  id           Int        @id @default(autoincrement())
+  enrollmentId Int
+  enrollment   Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  facilityId   Int
+  facility     Facility   @relation(fields: [facilityId], references: [id])
+
+  @@unique([enrollmentId, facilityId])
+}
