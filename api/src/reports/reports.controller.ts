@@ -51,6 +51,35 @@ export class ReportsController {
       .sort((a, b) => a.sortOrder - b.sortOrder || a.className.localeCompare(b.className) || a.admissionNo.localeCompare(b.admissionNo));
   }
 
+  // Head-count per class & section (empty sections included): enrolled = everyone on the roll for the year,
+  // studying = still active, of which new admissions vs continuing, plus those withdrawn.
+  @Get('strength')
+  async strength(@CurrentUser() u: AuthUser, @Query('schoolId', ParseIntPipe) schoolId: number, @Query('yearId', ParseIntPipe) yearId: number) {
+    assertSchool(u, schoolId);
+    const [sections, enrollments] = await Promise.all([
+      this.prisma.section.findMany({ where: { standard: { schoolId } }, include: { standard: true } }),
+      this.prisma.enrollment.findMany({
+        where: { yearId, student: { schoolId } },
+        select: { sectionId: true, isNewAdmission: true, student: { select: { active: true } }, withdrawal: { select: { id: true } } },
+      }),
+    ]);
+    const rows = new Map(sections.map((s) => [s.id, {
+      standardId: s.standardId, standard: s.standard.name, sortOrder: s.standard.sortOrder, sectionId: s.id, section: s.name,
+      enrolled: 0, studying: 0, newAdmissions: 0, continuing: 0, withdrawn: 0,
+    }]));
+    for (const e of enrollments) {
+      const r = rows.get(e.sectionId)!;
+      r.enrolled++;
+      if (e.withdrawal) r.withdrawn++;
+      if (e.student.active) {
+        r.studying++;
+        if (e.isNewAdmission) r.newAdmissions++;
+        else r.continuing++;
+      }
+    }
+    return [...rows.values()].sort((a, b) => a.sortOrder - b.sortOrder || a.section.localeCompare(b.section));
+  }
+
   // Valid (non-cancelled) receipts per day and payment mode.
   @Get('collection')
   async collection(

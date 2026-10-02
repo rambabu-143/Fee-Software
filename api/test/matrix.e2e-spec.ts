@@ -151,6 +151,7 @@ describe('authn/authz matrix + flows (e2e)', () => {
     { m: 'get', p: `/students/${x.studentId}/facilities?yearId=${x.yearId}` },
     { m: 'get', p: `/students/${x.studentId}/fines?yearId=${x.yearId}` },
     { m: 'get', p: `/withdrawals?${q(x)}` },
+    { m: 'get', p: `/reports/strength?${q(x)}` },
     { m: 'get', p: `/payments?${q(x)}` },
     { m: 'get', p: `/payments/${x.paymentId}` },
     { m: 'get', p: `/payments/${x.paymentId}/pdf` },
@@ -661,6 +662,57 @@ describe('authn/authz matrix + flows (e2e)', () => {
       const back = (await call('admin1', { m: 'get', p: `/students?${q(a)}&q=${encodeURIComponent(students[5].admissionNo)}` })).body[0];
       expect(back.active).toBe(true);
       expect((await call('viewer1', { m: 'get', p: `/withdrawals?${q(a)}` })).body).toEqual([]);
+    });
+
+    it('strength report: per class/section counts match the student roll, incl. withdrawals', async () => {
+      const strength = async () => (await call('viewer1', { m: 'get', p: `/reports/strength?${q(a)}` })).body as {
+        sectionId: number; standardId: number; enrolled: number; studying: number; newAdmissions: number; continuing: number; withdrawn: number
+      }[];
+      const roll = async () => (await call('viewer1', { m: 'get', p: `/students?${q(a)}` })).body as { id: number; active: boolean; enrollment: { sectionId: number; isNewAdmission: boolean } }[];
+      const check = async () => {
+        const rows = await strength();
+        const students = await roll();
+        for (const r of rows) {
+          const mine = students.filter((s) => s.enrollment.sectionId === r.sectionId);
+          expect.soft(r.enrolled, `enrolled ${r.sectionId}`).toBe(mine.length);
+          expect.soft(r.studying, `studying ${r.sectionId}`).toBe(mine.filter((s) => s.active).length);
+          expect.soft(r.newAdmissions, `new ${r.sectionId}`).toBe(mine.filter((s) => s.active && s.enrollment.isNewAdmission).length);
+          expect.soft(r.newAdmissions + r.continuing, 'new + continuing = studying').toBe(r.studying);
+        }
+        expect(rows.reduce((s, r) => s + r.enrolled, 0)).toBe(students.length);
+        return { rows, students };
+      };
+      const { rows, students } = await check();
+      expect(rows.length).toBeGreaterThan(3);
+      expect(rows.reduce((s, r) => s + r.withdrawn, 0)).toBe(0);
+      // empty sections still appear with zeros
+      const emptySec = (await call('admin1', { m: 'post', p: '/sections', b: { standardId: a.standardId, name: 'EMPTY' } })).body;
+      expect((await strength()).find((r) => r.sectionId === emptySec.id)).toMatchObject({ enrolled: 0, studying: 0, withdrawn: 0 });
+      await call('admin1', { m: 'delete', p: `/sections/${emptySec.id}` });
+
+      // sorted by class order then section
+      const orders = (await call('viewer1', { m: 'get', p: `/standards?schoolId=${a.schoolId}` })).body.map((s: { id: number }) => s.id);
+      const seen = rows.map((r) => orders.indexOf(r.standardId));
+      expect(seen).toEqual([...seen].sort((m, n) => m - n));
+
+      // a withdrawal moves one student from studying to withdrawn in their own section only
+      const victim = students[10];
+      const sec = victim.enrollment.sectionId;
+      const before = rows.find((r) => r.sectionId === sec)!;
+      expect((await call('accountant1', { m: 'post', p: `/students/${victim.id}/withdrawal`, b: { yearId: a.yearId, date: '2026-05-01', reason: 'strength test' } })).status).toBe(201);
+      const mid = await strength();
+      expect(mid.find((r) => r.sectionId === sec)).toMatchObject({ enrolled: before.enrolled, studying: before.studying - 1, withdrawn: 1 });
+      expect(mid.filter((r) => r.sectionId !== sec).reduce((s, r) => s + r.withdrawn, 0)).toBe(0);
+      expect((await call('admin1', { m: 'delete', p: `/students/${victim.id}/withdrawal?yearId=${a.yearId}` })).status).toBe(200);
+      expect((await strength()).find((r) => r.sectionId === sec)).toMatchObject({ studying: before.studying, withdrawn: 0 });
+
+      // validation + scoping
+      expect(await status('viewer1', { m: 'get', p: `/reports/strength?schoolId=${a.schoolId}` })).toBe(400);
+      expect(await status('viewer1', { m: 'get', p: `/reports/strength?schoolId=x&yearId=${a.yearId}` })).toBe(400);
+      const other = (await call('root', { m: 'get', p: `/reports/strength?${q(b)}` })).body as { sectionId: number }[];
+      const mine = new Set(rows.map((r) => r.sectionId));
+      expect(other.some((r) => mine.has(r.sectionId))).toBe(false); // never mixes schools
+      expect((await call('root', { m: 'get', p: `/reports/strength?schoolId=${a.schoolId}&yearId=999999` })).body.every((r: { enrolled: number }) => r.enrolled === 0)).toBe(true);
     });
 
     it('dues report: sectionId and installmentId filters, validated and school-scoped', async () => {

@@ -123,6 +123,7 @@ export default function Reports() {
         ),
       },
       { key: 'collection', label: 'Daily collection', children: <Collection /> },
+      { key: 'strength', label: 'Strength', children: <Strength /> },
       { key: 'withdrawals', label: 'Withdrawals', children: <Withdrawals /> },
     ]} />
   )
@@ -206,6 +207,45 @@ function Withdrawals() {
         { title: 'Payable', dataIndex: 'balanceDue', align: 'right', render: inr },
         { title: 'Refundable', dataIndex: 'excessPaid', align: 'right', render: inr },
       ]} />
+    </>
+  )
+}
+
+type Str = { standardId: number; standard: string; sectionId: number; section: string; enrolled: number; studying: number; newAdmissions: number; continuing: number; withdrawn: number }
+
+function Strength() {
+  const { schoolId, yearId } = useSelection()
+  const [rows, setRows] = useState<Str[]>([])
+
+  useEffect(() => {
+    if (!schoolId || !yearId) return
+    api<Str[]>(`/reports/strength?schoolId=${schoolId}&yearId=${yearId}`).then(setRows).catch((e) => message.error(e.message))
+  }, [schoolId, yearId])
+
+  const keys = ['enrolled', 'studying', 'newAdmissions', 'continuing', 'withdrawn'] as const
+  return (
+    <>
+      <Space wrap style={{ marginBottom: 16 }}>
+        <span><b>{sum(rows, (r) => r.studying)}</b> studying · {sum(rows, (r) => r.withdrawn)} withdrawn</span>
+        <Button onClick={() => downloadCsv('student-strength', ['Class', 'Section', 'Enrolled', 'Studying', 'New', 'Continuing', 'Withdrawn'],
+          rows.map((r) => [r.standard, r.section, r.enrolled, r.studying, r.newAdmissions, r.continuing, r.withdrawn]))}>CSV</Button>
+      </Space>
+      <Table rowKey="sectionId" dataSource={rows} size="small" scroll={{ x: true }} pagination={false}
+        columns={[
+          { title: 'Class', dataIndex: 'standard' },
+          { title: 'Section', dataIndex: 'section' },
+          { title: 'Enrolled', dataIndex: 'enrolled', align: 'right' },
+          { title: 'Studying', dataIndex: 'studying', align: 'right', render: (v: number) => <b>{v}</b> },
+          { title: 'New', dataIndex: 'newAdmissions', align: 'right' },
+          { title: 'Continuing', dataIndex: 'continuing', align: 'right' },
+          { title: 'Withdrawn', dataIndex: 'withdrawn', align: 'right' },
+        ]}
+        summary={() => rows.length > 0 && (
+          <Table.Summary.Row>
+            <Table.Summary.Cell index={0} colSpan={2}><b>Total</b></Table.Summary.Cell>
+            {keys.map((k, i) => <Table.Summary.Cell key={k} index={i + 2} align="right"><b>{sum(rows, (r) => r[k])}</b></Table.Summary.Cell>)}
+          </Table.Summary.Row>
+        )} />
     </>
   )
 }
