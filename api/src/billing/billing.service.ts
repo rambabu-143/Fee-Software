@@ -40,12 +40,16 @@ export class BillingService {
         fineAdjustments: true,
         withdrawal: true,
         facilityAssignments: { include: { facility: true } },
+        transport: { include: { pickupStop: { include: { route: true } }, dropStop: { include: { route: true } } } },
       },
     });
     if (!enrollments.length) return [];
     const schoolId = enrollments[0].student.schoolId;
     const studentIds = enrollments.map((e) => e.studentId);
-    const facilityIds = enrollments.flatMap((e) => e.facilityAssignments.map((a) => a.facilityId));
+    const facilityIds = enrollments.flatMap((e) => [
+      ...e.facilityAssignments.map((a) => a.facilityId),
+      ...[e.transport?.pickupStop?.slabId, e.transport?.dropStop?.slabId].filter((x): x is number => x != null),
+    ]);
 
     const [installments, structure, allocations, facilityStructure] = await Promise.all([
       db.installment.findMany({ where: { schoolId, yearId } }),
@@ -91,11 +95,30 @@ export class BillingService {
         })),
         withdrawnOn: e.withdrawal?.date ?? null,
         fineOverrides: e.fineAdjustments.map((f) => ({ installmentId: f.installmentId, amount: toPaise(f.amount.toFixed(2)) })),
-        facilityLines: e.facilityAssignments.flatMap((a) =>
-          facilityStructure
-            .filter((s) => s.facilityId === a.facilityId)
-            .map((s) => ({ facilityId: a.facilityId, name: a.facility.name, installmentId: s.installmentId, amount: toPaise(s.amount.toFixed(2)) })),
-        ),
+        facilityLines: [
+          ...e.facilityAssignments.flatMap((a) =>
+            facilityStructure
+              .filter((s) => s.facilityId === a.facilityId)
+              .map((s) => ({ facilityId: a.facilityId, name: a.facility.name, installmentId: s.installmentId, amount: toPaise(s.amount.toFixed(2)) })),
+          ),
+          // Stop-based transport: each leg is half its slab's fare. Floor on pickup, ceil on drop, so one
+          // slab used both ways sums to exactly the fare. ids sit far above real facility ids to stay unique.
+          ...(['pickup', 'drop'] as const).flatMap((leg, n) => {
+            const stop = leg === 'pickup' ? e.transport?.pickupStop : e.transport?.dropStop;
+            if (!stop) return [];
+            return facilityStructure
+              .filter((s) => s.facilityId === stop.slabId)
+              .map((s) => {
+                const fare = toPaise(s.amount.toFixed(2));
+                return {
+                  facilityId: 1_000_000 + stop.id * 2 + n,
+                  name: `Transport ${leg} · ${stop.name} (${stop.route.name})`,
+                  installmentId: s.installmentId,
+                  amount: leg === 'pickup' ? Math.floor(fare / 2) : fare - Math.floor(fare / 2),
+                };
+              });
+          }),
+        ],
         asOf,
       }),
     }));

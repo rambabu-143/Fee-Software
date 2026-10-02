@@ -9,7 +9,7 @@ import { PrismaService } from './../src/prisma/prisma.service.js';
 // Run against a throwaway DB (DATABASE_URL=.../fees_e2e), seeded with `npx prisma db seed`.
 type Ids = {
   schoolId: number; yearId: number; standardId: number; sectionId: number; section2Id: number;
-  headId: number; optHeadId: number; instId: number; studentId: number; paymentId: number; facilityId: number; userId: number;
+  headId: number; optHeadId: number; instId: number; studentId: number; paymentId: number; facilityId: number; userId: number; slabId: number; stopId: number;
 };
 type Req = { m: 'get' | 'post' | 'put' | 'patch' | 'delete'; p: string; b?: object };
 type Role = 'SUPERADMIN' | 'ADMIN' | 'ACCOUNTANT' | 'VIEWER';
@@ -44,7 +44,10 @@ describe('authn/authz matrix + flows (e2e)', () => {
     const insts = await g(`/installments?schoolId=${schoolId}&yearId=${yearId}`);
     const studs = await g(`/students?schoolId=${schoolId}&yearId=${yearId}`);
     const fac = (await call(root, { m: 'post', p: '/facilities', b: { schoolId, kind: 'TRANSPORT', name: `e2e-route-${code}` } })).body;
+    const slab = (await call(root, { m: 'post', p: '/facilities', b: { schoolId, kind: 'SLAB', name: `e2e-slab-${code}` } })).body;
+    const stop = (await call(root, { m: 'post', p: '/stops', b: { routeId: fac.id, slabId: slab.id, name: `e2e-stop-${code}`, sequence: 1 } })).body;
     return {
+      slabId: slab.id, stopId: stop.id,
       schoolId, yearId, standardId: std.id, sectionId: std.sections[0].id,
       section2Id: (stds.flatMap((s: { sections: { id: number }[] }) => s.sections).find((x: { id: number }) => x.id !== std.sections[0].id)).id,
       headId: heads.find((h: { type: string }) => h.type === 'MONTHLY').id,
@@ -151,6 +154,9 @@ describe('authn/authz matrix + flows (e2e)', () => {
     { m: 'get', p: `/students/${x.studentId}/facilities?yearId=${x.yearId}` },
     { m: 'get', p: `/students/${x.studentId}/fines?yearId=${x.yearId}` },
     { m: 'get', p: `/withdrawals?${q(x)}` },
+    { m: 'get', p: `/stops?schoolId=${x.schoolId}` },
+    { m: 'get', p: `/students/${x.studentId}/transport?yearId=${x.yearId}` },
+    { m: 'get', p: `/reports/transport?${q(x)}` },
     { m: 'get', p: `/reports/strength?${q(x)}` },
     { m: 'get', p: `/payments?${q(x)}` },
     { m: 'get', p: `/payments/${x.paymentId}` },
@@ -183,6 +189,10 @@ describe('authn/authz matrix + flows (e2e)', () => {
     [{ m: 'post', p: '/students', b: { schoolId: x.schoolId, yearId: x.yearId, admissionNo: 'authz-1', name: 'n', sectionId: x.sectionId, isNewAdmission: false, optionalHeadIds: [] } }, ['ADMIN', 'ACCOUNTANT']],
     [{ m: 'patch', p: `/students/${x.studentId}`, b: { yearId: x.yearId, name: 'Same' } }, ['ADMIN', 'ACCOUNTANT']],
     [{ m: 'put', p: `/students/${x.studentId}/concessions`, b: { yearId: x.yearId, items: [] } }, ['ADMIN']],
+    [{ m: 'post', p: '/stops', b: { routeId: x.facilityId, slabId: x.slabId, name: 'authz-stop', sequence: 98 } }, ['ADMIN']],
+    [{ m: 'patch', p: `/stops/${x.stopId}`, b: { name: 'renamed' } }, ['ADMIN']],
+    [{ m: 'delete', p: `/stops/${x.stopId}` }, ['ADMIN']],
+    [{ m: 'put', p: `/students/${x.studentId}/transport`, b: { yearId: x.yearId } }, ['ADMIN', 'ACCOUNTANT']],
     [{ m: 'put', p: `/students/${x.studentId}/fines`, b: { yearId: x.yearId, items: [] } }, ['ADMIN']],
     [{ m: 'post', p: `/students/${x.studentId}/withdrawal`, b: { yearId: x.yearId, date: '2026-05-01', reason: 'authz probe' } }, ['ADMIN', 'ACCOUNTANT']],
     [{ m: 'delete', p: `/students/${x.studentId}/withdrawal?yearId=${x.yearId}` }, ['ADMIN']],
@@ -662,6 +672,139 @@ describe('authn/authz matrix + flows (e2e)', () => {
       const back = (await call('admin1', { m: 'get', p: `/students?${q(a)}&q=${encodeURIComponent(students[5].admissionNo)}` })).body[0];
       expect(back.active).toBe(true);
       expect((await call('viewer1', { m: 'get', p: `/withdrawals?${q(a)}` })).body).toEqual([]);
+    });
+
+    it('transport: slabs, stops, half-fare legs, exclusivity with flat routes, roster, withdrawal', async () => {
+      const students = (await call('admin1', { m: 'get', p: `/students?${q(a)}` })).body;
+      const [s1, s2, s3] = [students[20].id, students[21].id, students[22].id];
+      const insts = (await call('admin1', { m: 'get', p: `/installments?schoolId=${a.schoolId}&yearId=${a.yearId}` })).body as { id: number }[];
+      const bill = async (id: number) => (await call('admin1', { m: 'get', p: `/students/${id}/bill?yearId=${a.yearId}` })).body;
+      const mk = (kind: string, name: string, who = 'admin1') => call(who, { m: 'post', p: '/facilities', b: { schoolId: a.schoolId, kind, name } });
+      const grid = (facilityId: number, amount: number) => insts.map((i) => ({ facilityId, installmentId: i.id, amount }));
+      const price = (items: object[]) => call('admin1', { m: 'put', p: '/facilities/structure', b: { yearId: a.yearId, schoolId: a.schoolId, kind: 'SLAB', items } });
+
+      // slabs are facilities of kind SLAB: priced per installment, listed separately from routes/rooms
+      const slabA = (await mk('SLAB', 'SLAB A')).body, slabB = (await mk('SLAB', 'SLAB B')).body, slabC = (await mk('SLAB', 'SLAB C')).body;
+      expect((await mk('SLAB', 'SLAB A')).status).toBe(409);
+      expect((await price([...grid(slabA.id, 1000), ...grid(slabB.id, 600), ...grid(slabC.id, 1000.01)])).status).toBe(200);
+      expect((await call('viewer1', { m: 'get', p: `/facilities?schoolId=${a.schoolId}&kind=SLAB` })).body.map((f: { name: string }) => f.name)).toEqual(expect.arrayContaining(['SLAB A', 'SLAB B', 'SLAB C']));
+      expect((await call('viewer1', { m: 'get', p: `/facilities?schoolId=${a.schoolId}&kind=TRANSPORT` })).body.map((f: { name: string }) => f.name)).not.toContain('SLAB A');
+
+      // routes + stops: validation and authz
+      const route = (await mk('TRANSPORT', 'R1')).body;
+      const hostel = (await mk('HOSTEL', 'H-ROOM')).body;
+      const stop = (b2: object, who = 'admin1') => call(who, { m: 'post', p: '/stops', b: { routeId: route.id, slabId: slabA.id, name: 'Gate', sequence: 1, pickupTime: '07:15', dropTime: '14:40', ...b2 } });
+      const gate = await stop({});
+      expect(gate.status).toBe(201);
+      expect(gate.body).toMatchObject({ name: 'Gate', route: 'R1', slab: 'SLAB A', pickupTime: '07:15', dropTime: '14:40' });
+      const park = (await stop({ name: 'Park', sequence: 2, slabId: slabB.id, pickupTime: undefined, dropTime: undefined })).body;
+      const odd = (await stop({ name: 'Odd', sequence: 3, slabId: slabC.id })).body;
+      expect((await stop({ name: 'Other', sequence: 1 })).status).toBe(409); // sequence taken on this route
+      expect((await stop({ sequence: 9 })).status).toBe(409); // name taken on this route
+      expect((await stop({ name: 'X', sequence: 0 })).status).toBe(400);
+      expect((await stop({ name: 'X', sequence: 9, pickupTime: '25:00' })).status).toBe(400);
+      expect((await stop({ name: 'X', sequence: 9, dropTime: '7pm' })).status).toBe(400);
+      expect((await stop({ name: 'X', sequence: 9, extra: 1 })).status).toBe(400);
+      expect((await stop({ name: 'X', sequence: 9, routeId: hostel.id })).status).toBe(400); // not a bus route
+      expect((await stop({ name: 'X', sequence: 9, slabId: route.id })).status).toBe(400); // not a slab
+      expect((await stop({ name: 'X', sequence: 9, slabId: b.slabId })).status).toBe(400); // another school's slab
+      expect((await stop({ name: 'X', sequence: 9, routeId: b.facilityId })).status).toBe(403); // another school's route
+      expect((await stop({ name: 'X', sequence: 9, routeId: 999999 })).status).toBe(400);
+      expect((await stop({ name: 'X', sequence: 9 }, 'accountant1')).status).toBe(403);
+      expect((await stop({ name: 'X', sequence: 9 }, 'admin2')).status).toBe(403);
+
+      const listed = (await call('viewer1', { m: 'get', p: `/stops?schoolId=${a.schoolId}&routeId=${route.id}` })).body;
+      expect(listed.map((x: { name: string }) => x.name)).toEqual(['Gate', 'Park', 'Odd']);
+      expect(await status('viewer1', { m: 'get', p: `/stops?schoolId=${a.schoolId}&routeId=abc` })).toBe(400);
+      const upd = (id: number, b2: object, who = 'admin1') => call(who, { m: 'patch', p: `/stops/${id}`, b: b2 });
+      expect((await upd(park.id, { name: 'Park Gate', slabId: slabA.id })).body).toMatchObject({ name: 'Park Gate', slab: 'SLAB A' });
+      expect((await upd(park.id, { slabId: slabB.id, name: 'Park' })).status).toBe(200);
+      expect((await upd(park.id, { routeId: route.id })).status).toBe(400); // a stop never changes route
+      expect((await upd(park.id, { slabId: b.slabId })).status).toBe(400);
+      expect((await upd(park.id, { sequence: 1 })).status).toBe(409);
+      expect((await upd(park.id, { name: 'x' }, 'accountant1')).status).toBe(403);
+      expect((await upd(park.id, { name: 'x' }, 'admin2')).status).toBe(403);
+      expect((await upd(999999, { name: 'x' })).status).toBe(404);
+
+      // student assignment: each leg costs half its slab's fare
+      for (const id of [s1, s2, s3]) await call('accountant1', { m: 'put', p: `/students/${id}/facilities`, b: { yearId: a.yearId, kind: 'TRANSPORT' } }); // seed may put students on flat routes
+      const base = await bill(s1);
+      const put = (id: number, b2: object, who = 'accountant1') => call(who, { m: 'put', p: `/students/${id}/transport`, b: { yearId: a.yearId, ...b2 } });
+      expect((await put(s1, { pickupStopId: gate.body.id, dropStopId: park.id })).body).toMatchObject({ pickup: { name: 'Gate', route: 'R1', slab: 'SLAB A' }, drop: { name: 'Park', slab: 'SLAB B' } });
+      const both = await bill(s1);
+      expect(Number(both.totals.charges)).toBeCloseTo(Number(base.totals.charges) + 4 * (500 + 300), 2);
+      const names = both.installments[0].lines.map((l: { name: string }) => l.name);
+      expect(names).toEqual(expect.arrayContaining(['Transport pickup · Gate (R1)', 'Transport drop · Park (R1)']));
+      expect((await put(s1, { pickupStopId: gate.body.id })).body.drop).toBeNull(); // one leg only
+      expect(Number((await bill(s1)).totals.charges)).toBeCloseTo(Number(base.totals.charges) + 4 * 500, 2);
+      expect((await put(s1, { dropStopId: park.id })).body.pickup).toBeNull();
+      expect(Number((await bill(s1)).totals.charges)).toBeCloseTo(Number(base.totals.charges) + 4 * 300, 2);
+      // one slab used both ways sums to exactly the fare even with an odd paisa (1000.01)
+      const base2 = await bill(s2);
+      expect((await put(s2, { pickupStopId: odd.id, dropStopId: odd.id })).status).toBe(200);
+      expect(Number((await bill(s2)).totals.charges)).toBeCloseTo(Number(base2.totals.charges) + 4 * 1000.01, 2);
+      expect((await call('viewer1', { m: 'get', p: `/students/${s2}/transport?yearId=${a.yearId}` })).body.pickup).toMatchObject({ name: 'Odd' });
+
+      // validation, authz, isolation
+      expect((await put(s3, { pickupStopId: 999999 })).status).toBe(400);
+      expect((await put(s3, { pickupStopId: b.stopId })).status).toBe(400); // another school's stop
+      expect((await put(s3, { pickupStopId: 'x' as unknown as number })).status).toBe(400);
+      expect((await put(s3, { pickupStopId: gate.body.id, extra: 1 })).status).toBe(400);
+      expect((await put(s3, { pickupStopId: gate.body.id }, 'viewer1')).status).toBe(403);
+      expect((await put(s3, { pickupStopId: gate.body.id }, 'admin2')).status).toBe(403);
+      expect((await put(s3, { yearId: 999999, pickupStopId: gate.body.id })).status).toBe(404);
+      expect((await bill(s3)).totals.charges).toBe((await bill(s3)).totals.charges);
+
+      // stops and a flat-fee route can't both bill the same student
+      const flat = (id: number, facilityId?: number, kind = 'TRANSPORT') => call('accountant1', { m: 'put', p: `/students/${id}/facilities`, b: { yearId: a.yearId, kind, facilityId } });
+      expect((await flat(s2, route.id)).status).toBe(400); // s2 has stops
+      expect((await flat(s2, undefined)).status).toBe(200); // clearing the flat route is always fine
+      expect((await flat(s3, route.id)).status).toBe(200);
+      expect((await put(s3, { pickupStopId: gate.body.id })).status).toBe(400); // s3 is on a flat route
+      expect((await flat(s3, undefined)).status).toBe(200);
+      expect((await flat(s3, slabA.id, 'SLAB')).status).toBe(400); // slabs are never assigned to students directly
+
+      // deleting what is in use is refused
+      expect((await put(s1, { pickupStopId: gate.body.id, dropStopId: park.id })).status).toBe(200);
+      expect(await status('admin1', { m: 'delete', p: `/stops/${gate.body.id}` })).toBe(409);
+      expect(await status('admin1', { m: 'delete', p: `/facilities/${slabA.id}` })).toBe(409);
+      expect(await status('admin1', { m: 'delete', p: `/facilities/${route.id}` })).toBe(409);
+      expect(await status('accountant1', { m: 'delete', p: `/stops/${gate.body.id}` })).toBe(403);
+      expect(await status('admin2', { m: 'delete', p: `/stops/${gate.body.id}` })).toBe(403);
+
+      // bus roster: students per stop, inactive ones left off, scoped to the school
+      expect((await put(s1, { pickupStopId: gate.body.id, dropStopId: park.id })).status).toBe(200);
+      const roster = async () => (await call('viewer1', { m: 'get', p: `/reports/transport?${q(a)}` })).body as {
+        route: string; pickups: number; drops: number; stops: { name: string; pickup: { id: number }[]; drop: { id: number }[]; sequence: number }[]
+      }[];
+      const r1 = (await roster()).find((r) => r.route === 'R1')!;
+      expect(r1.stops.map((x) => x.name)).toEqual(['Gate', 'Park', 'Odd']);
+      expect(r1.stops[0].pickup.map((x) => x.id)).toEqual([s1]);
+      expect(r1.stops[1].drop.map((x) => x.id).sort()).toEqual([s1].sort());
+      expect(r1.stops[2].pickup.map((x) => x.id)).toEqual([s2]);
+      expect(r1.pickups).toBe(2);
+      expect(r1.drops).toBe(2);
+      expect((await call('root', { m: 'get', p: `/reports/transport?${q(b)}` })).body.some((r: { route: string }) => r.route === 'R1')).toBe(false);
+
+      // a withdrawn student leaves the roster, and stop fares stop with the later installments
+      const beforeW = await bill(s1);
+      expect((await call('accountant1', { m: 'post', p: `/students/${s1}/withdrawal`, b: { yearId: a.yearId, date: '2026-05-01', reason: 'transport test' } })).status).toBe(201);
+      const afterW = await bill(s1);
+      expect(afterW.installments[0].lines.map((l: { name: string }) => l.name)).toEqual(expect.arrayContaining(['Transport pickup · Gate (R1)']));
+      expect(afterW.installments[2].lines).toEqual([]);
+      expect(Number(afterW.totals.charges)).toBeLessThan(Number(beforeW.totals.charges));
+      expect((await roster()).find((r) => r.route === 'R1')!.stops[0].pickup).toEqual([]);
+      expect((await call('admin1', { m: 'delete', p: `/students/${s1}/withdrawal?yearId=${a.yearId}` })).status).toBe(200);
+      expect((await roster()).find((r) => r.route === 'R1')!.stops[0].pickup.map((x) => x.id)).toEqual([s1]);
+
+      // clearing releases the stops, which can then be deleted (and slabs, and the route)
+      for (const id of [s1, s2]) expect((await put(id, {})).body).toEqual({ pickup: null, drop: null });
+      expect(Number((await bill(s1)).totals.charges)).toBeCloseTo(Number(base.totals.charges), 2);
+      for (const st of [gate.body.id, park.id, odd.id]) expect(await status('admin1', { m: 'delete', p: `/stops/${st}` })).toBe(200);
+      expect(await status('admin1', { m: 'delete', p: `/stops/${gate.body.id}` })).toBe(404);
+      expect(await status('admin1', { m: 'delete', p: `/facilities/${slabA.id}` })).toBe(409); // still has a fee grid
+      expect((await price([])).status).toBe(200);
+      for (const f of [slabA.id, slabB.id, slabC.id, route.id, hostel.id]) expect(await status('admin1', { m: 'delete', p: `/facilities/${f}` })).toBe(200);
     });
 
     it('strength report: per class/section counts match the student roll, incl. withdrawals', async () => {

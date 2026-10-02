@@ -9,9 +9,9 @@ type Cell = { facilityId: number; installmentId: number; amount: string }
 const key = (f: number, i: number) => `${f}:${i}`
 const money = (n: number) => n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
-// Shared screen for transport routes and hostel rooms: a named list of plans,
+// Shared screen for transport routes, transport slabs (fare tiers) and hostel rooms: a named list of plans,
 // each priced per installment. `kind` picks which one; Transport.tsx/Hostel.tsx wrap this.
-export default function FacilityPage({ kind, label }: { kind: 'TRANSPORT' | 'HOSTEL'; label: string }) {
+export default function FacilityPage({ kind, label }: { kind: 'TRANSPORT' | 'HOSTEL' | 'SLAB'; label: string }) {
   const { schoolId, yearId } = useSelection()
   const [rows, setRows] = useState<Facility[]>([])
   const [insts, setInsts] = useState<Installment[]>([])

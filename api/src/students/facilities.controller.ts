@@ -36,6 +36,10 @@ export class StudentFacilitiesController {
   @Put()
   async set(@CurrentUser() u: AuthUser, @Param('id', ParseIntPipe) id: number, @Body() dto: SetFacilityDto) {
     const e = await this.enrollment(u, id, dto.yearId);
+    if (dto.kind === 'SLAB') throw new BadRequestException('Slabs are priced through stops, not assigned to students');
+    if (dto.kind === 'TRANSPORT' && dto.facilityId !== undefined && (await this.prisma.transportAssignment.count({ where: { enrollmentId: e.id } }))) {
+      throw new BadRequestException('Student has bus stops assigned; clear them before using a flat-fee route');
+    }
 
     if (dto.facilityId !== undefined) {
       const f = await this.prisma.facility.findUnique({ where: { id: dto.facilityId } });

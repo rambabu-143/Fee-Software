@@ -93,6 +93,7 @@ model Enrollment {
   fineAdjustments     FineAdjustment[]
   facilityAssignments FacilityAssignment[]
   withdrawal          Withdrawal?
+  transport           TransportAssignment?
 
   @@unique([studentId, yearId])
 }
@@ -240,6 +241,36 @@ model Concession {
   @@unique([enrollmentId, feeHeadId])
 }
 
+// A bus stop on a route (a TRANSPORT facility), priced by its slab (a SLAB facility).
+model Stop {
+  id         Int                    @id @default(autoincrement())
+  routeId    Int
+  route      Facility               @relation("RouteStops", fields: [routeId], references: [id])
+  slabId     Int
+  slab       Facility               @relation("SlabStops", fields: [slabId], references: [id])
+  name       String
+  sequence   Int
+  pickupTime String?
+  dropTime   String?
+  pickups    TransportAssignment[]  @relation("Pickup")
+  drops      TransportAssignment[]  @relation("Drop")
+
+  @@unique([routeId, sequence])
+  @@unique([routeId, name])
+}
+
+// Where a student boards in the morning and gets off in the afternoon. Each leg costs half
+// of its stop's slab fee, so a student using one leg pays half and both legs pay the full fare.
+model TransportAssignment {
+  id           Int        @id @default(autoincrement())
+  enrollmentId Int        @unique
+  enrollment   Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  pickupStopId Int?
+  pickupStop   Stop?      @relation("Pickup", fields: [pickupStopId], references: [id], onDelete: Restrict)
+  dropStopId   Int?
+  dropStop     Stop?      @relation("Drop", fields: [dropStopId], references: [id], onDelete: Restrict)
+}
+
 // A student leaving mid-year. Installments due after `date` stop being charged; the student
 // is marked inactive. balanceDue / excessPaid are the settlement figures when it was recorded.
 model Withdrawal {
@@ -269,9 +300,11 @@ model FineAdjustment {
   @@unique([enrollmentId, installmentId])
 }
 
+// SLAB = a transport fare tier (name + full two-way fee per installment); stops point at one.
 enum FacilityKind {
   TRANSPORT
   HOSTEL
+  SLAB
 }
 
 // A transport route or hostel room a school offers. Same shape for both kinds,
@@ -284,6 +317,8 @@ model Facility {
   name        String
   structures  FacilityFeeStructure[]
   assignments FacilityAssignment[]
+  stops       Stop[]                 @relation("RouteStops")
+  slabStops   Stop[]                 @relation("SlabStops")
 
   @@unique([schoolId, kind, name])
 }

@@ -80,6 +80,31 @@ export class ReportsController {
     return [...rows.values()].sort((a, b) => a.sortOrder - b.sortOrder || a.section.localeCompare(b.section));
   }
 
+  // Bus lists: for every route, each stop in order with the students boarding (pickup) and alighting (drop) there.
+  @Get('transport')
+  async transport(@CurrentUser() u: AuthUser, @Query('schoolId', ParseIntPipe) schoolId: number, @Query('yearId', ParseIntPipe) yearId: number) {
+    assertSchool(u, schoolId);
+    const [stops, assignments] = await Promise.all([
+      this.prisma.stop.findMany({ where: { route: { schoolId } }, include: { route: true, slab: true }, orderBy: [{ route: { name: 'asc' } }, { sequence: 'asc' }] }),
+      this.prisma.transportAssignment.findMany({
+        where: { enrollment: { yearId, student: { schoolId, active: true } } },
+        select: { pickupStopId: true, dropStopId: true, enrollment: { select: { student: { select: { id: true, admissionNo: true, name: true } }, section: { include: { standard: true } } } } },
+      }),
+    ]);
+    const who = (a: (typeof assignments)[number]) => ({ ...a.enrollment.student, className: `${a.enrollment.section.standard.name} ${a.enrollment.section.name}` });
+    const routes = new Map<number, { routeId: number; route: string; stops: unknown[]; pickups: number; drops: number }>();
+    for (const s of stops) {
+      const r = routes.get(s.routeId) ?? { routeId: s.routeId, route: s.route.name, stops: [], pickups: 0, drops: 0 };
+      const pickup = assignments.filter((a) => a.pickupStopId === s.id).map(who);
+      const drop = assignments.filter((a) => a.dropStopId === s.id).map(who);
+      r.pickups += pickup.length;
+      r.drops += drop.length;
+      r.stops.push({ stopId: s.id, sequence: s.sequence, name: s.name, slab: s.slab.name, pickupTime: s.pickupTime, dropTime: s.dropTime, pickup, drop });
+      routes.set(s.routeId, r);
+    }
+    return [...routes.values()];
+  }
+
   // Valid (non-cancelled) receipts per day and payment mode.
   @Get('collection')
   async collection(
