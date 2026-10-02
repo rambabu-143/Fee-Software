@@ -38,6 +38,7 @@ export class BillingService {
         optionalHeads: { select: { id: true } },
         concessions: true,
         fineAdjustments: true,
+        withdrawal: true,
         facilityAssignments: { include: { facility: true } },
       },
     });
@@ -88,6 +89,7 @@ export class BillingService {
           feeHeadId: c.feeHeadId, reason: c.reason,
           percent: c.percent === null ? null : Number(c.percent), amount: c.amount === null ? null : toPaise(c.amount.toFixed(2)),
         })),
+        withdrawnOn: e.withdrawal?.date ?? null,
         fineOverrides: e.fineAdjustments.map((f) => ({ installmentId: f.installmentId, amount: toPaise(f.amount.toFixed(2)) })),
         facilityLines: e.facilityAssignments.flatMap((a) =>
           facilityStructure

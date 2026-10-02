@@ -1,5 +1,5 @@
 import {
-  Button, Checkbox, Drawer, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tag, message,
+  Button, Checkbox, Drawer, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tag, message,
 } from 'antd'
 import { useEffect, useState } from 'react'
 import { api, openPdf } from '../api'
@@ -8,6 +8,7 @@ import { BillView, type Bill } from '../bill'
 import { ConcessionsModal } from '../concessions'
 import { FacilitiesModal } from '../facilities'
 import { FinesModal } from '../fines'
+import { WithdrawModal } from '../withdrawal'
 
 type Standard = { id: number; name: string; sections: { id: number; name: string }[] }
 type FeeHead = { id: number; name: string; type: string }
@@ -24,6 +25,7 @@ export default function Students() {
   const [conc, setConc] = useState<Student | null>(null)
   const [fac, setFac] = useState<Student | null>(null)
   const [fine, setFine] = useState<Student | null>(null)
+  const [leaving, setLeaving] = useState<Student | null>(null)
   const [filter, setFilter] = useState<{ standardId?: number; q: string }>({ q: '' })
   const [editing, setEditing] = useState<Partial<Student> | null>(null)
   const [bill, setBill] = useState<(Bill & { id: number }) | null>(null)
@@ -70,6 +72,16 @@ export default function Students() {
     }
   }
 
+  async function readmit(id: number) {
+    try {
+      await api(`/students/${id}/withdrawal?yearId=${yearId}`, { method: 'DELETE' })
+      message.success('Student re-admitted')
+      await load()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
   async function showBill(id: number) {
     try {
       setBill({ ...(await api<Bill>(`/students/${id}/bill?yearId=${yearId}`)), id })
@@ -103,6 +115,16 @@ export default function Students() {
               <Button size="small" onClick={() => setConc(r)}>Concessions</Button>
               <Button size="small" onClick={() => setFine(r)}>Fines</Button>
               <Button size="small" onClick={() => setFac(r)}>Transport/Hostel</Button>
+              {r.active ? (
+                <Button size="small" danger onClick={() => setLeaving(r)}>Withdraw</Button>
+              ) : (
+                <>
+                  <Button size="small" onClick={() => openPdf(`/students/${r.id}/withdrawal/pdf?yearId=${yearId}`).catch((e) => message.error(e.message))}>Slip</Button>
+                  <Popconfirm title="Re-admit this student? Charges after the leaving date return." onConfirm={() => readmit(r.id)}>
+                    <Button size="small">Re-admit</Button>
+                  </Popconfirm>
+                </>
+              )}
             </Space>
           ),
         },
@@ -141,6 +163,7 @@ export default function Students() {
         )}
       </Drawer>
       <ConcessionsModal student={conc} yearId={yearId} heads={heads} onClose={() => setConc(null)} />
+      <WithdrawModal student={leaving} yearId={yearId} onClose={() => setLeaving(null)} onDone={() => { setLeaving(null); load().catch((e) => message.error(e.message)) }} />
       <FinesModal student={fine} schoolId={schoolId} yearId={yearId} onClose={() => setFine(null)} />
       <FacilitiesModal student={fac} schoolId={schoolId} yearId={yearId} onClose={() => setFac(null)} />
     </>

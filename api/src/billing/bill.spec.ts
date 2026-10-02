@@ -19,6 +19,7 @@ const base: BillInput = {
   payments: [],
   concessions: [],
   fineOverrides: [],
+  withdrawnOn: null,
   facilityLines: [],
   asOf: d('2026-04-01'),
 };
@@ -77,6 +78,20 @@ describe('calculateBill', () => {
     expect(waivedAfterFinePaid.installments[0]).toMatchObject({ fineDue: 0, chargesDue: 497000, due: 497000 });
     const t = waivedAfterFinePaid.totals;
     expect(t.charges + t.fine - t.paid).toBe(t.due); // books still balance
+  });
+
+  it('withdrawal: installments due after the leaving date stop being charged; prepayment becomes excess', () => {
+    const left = calculateBill({ ...base, asOf: d('2026-09-01'), withdrawnOn: d('2026-05-01') });
+    expect(left.installments[1]).toMatchObject({ charges: 0, fine: 0, due: 0, excess: 0, lines: [] }); // 2nd due 07-10 > 05-01
+    expect(left.installments[0].due).toBeGreaterThan(0); // earlier installment is still owed
+    expect(left.installments[0].fine).toBeGreaterThan(0); // and keeps accruing fine until paid
+    const prepaid = calculateBill({ ...base, asOf: d('2026-09-01'), withdrawnOn: d('2026-05-01'), payments: [pay(1, '2026-04-02', 500000), pay(2, '2026-04-02', 500000)] });
+    expect(prepaid.installments[1]).toMatchObject({ charges: 0, due: 0, excess: 500000 });
+    expect(prepaid.installments[0]).toMatchObject({ due: 0, excess: 0 });
+    expect(prepaid.totals.due).toBe(0);
+    // leaving exactly on a due date still owes that installment
+    expect(calculateBill({ ...base, withdrawnOn: d('2026-07-10') }).installments[1].charges).toBe(500000);
+    expect(calculateBill({ ...base }).installments[1].charges).toBe(500000); // not withdrawn: unchanged
   });
 
   it('paying before the fine date means no fine; fine freezes on the day charges are cleared', () => {

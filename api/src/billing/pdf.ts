@@ -133,3 +133,30 @@ export function billPdf(school: string, b: BillPdf) {
     doc.font('Helvetica-Oblique').fontSize(9).text(inWords(Math.round(Number(b.totals.due) * 100)));
   });
 }
+
+export type WithdrawalPdf = Omit<BillPdf, 'asOf'> & {
+  date: Date; reason: string; remarks: string | null; excess: string; recordedBy: string
+};
+
+export function withdrawalPdf(school: string, w: WithdrawalPdf) {
+  return toBuffer((doc) => {
+    header(doc, school, `Withdrawal Settlement · ${w.year}`);
+    fields(doc, [
+      ['Student', `${w.student.name} (${w.student.admissionNo})`],
+      ['Class', w.student.className],
+      ['Withdrawn on', w.date.toISOString().slice(0, 10)],
+      ['Reason', w.reason + (w.remarks ? ` - ${w.remarks}` : '')],
+    ]);
+    const n = (v: string) => Number(v).toLocaleString('en-IN', { minimumFractionDigits: 2 });
+    table(doc, [
+      { title: 'Installment', width: 84 }, { title: 'Due', width: 54 }, { title: 'Charges', width: 56, align: 'right' },
+      { title: 'Fine', width: 46, align: 'right' }, { title: 'Paid', width: 54, align: 'right' }, { title: 'Balance', width: 54, align: 'right' },
+    ], [
+      ...w.installments.map((i) => [i.label, i.dueDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit', timeZone: 'UTC' }), n(i.charges), n(i.fine), n(i.paid), n(i.due)]),
+      ['Total', '', n(w.totals.charges), n(w.totals.fine), n(w.totals.paid), n(w.totals.due)],
+    ], true);
+    doc.font('Helvetica-Bold').text(Number(w.totals.due) > 0 ? `Payable by family: ${inr(w.totals.due)}` : 'No dues payable.');
+    if (Number(w.excess) > 0) doc.text(`Refundable to family (paid in advance): ${inr(w.excess)}`);
+    doc.moveDown(2).font('Helvetica').fontSize(9).text(`Recorded by ${w.recordedBy}`, { align: 'right' });
+  });
+}

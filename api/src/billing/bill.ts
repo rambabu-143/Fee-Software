@@ -15,6 +15,8 @@ export type BillInput = {
   // Transport/hostel: a flat amount per installment for whichever routes/rooms the student is on.
   // No concessions apply to these (feeHeadId is negative so the concession lookup never matches).
   // Fixed fine (paise) replacing the computed one for that installment; 0 waives it.
+  // Student left on this date: installments due after it carry no charges.
+  withdrawnOn: Date | null;
   fineOverrides: { installmentId: number; amount: number }[];
   facilityLines: { facilityId: number; name: string; installmentId: number; amount: number }[];
   asOf: Date;
@@ -31,6 +33,8 @@ export type InstallmentBill = {
   fine: number;
   fineDays: number;
   fineOverridden: boolean;
+  // Paid beyond what is owed for this installment (e.g. prepaid, then withdrew): owed back to the family.
+  excess: number;
   chargesDue: number;
   fineDue: number;
   paid: number;
@@ -62,7 +66,8 @@ export function calculateBill(input: BillInput) {
   const installments: InstallmentBill[] = [...input.installments]
     .sort((a, b) => a.number - b.number)
     .map((inst) => {
-      const lines = input.structure
+      const dropped = input.withdrawnOn !== null && utcDay(inst.dueDate) > utcDay(input.withdrawnOn);
+      const lines = (dropped ? [] : input.structure)
         .filter((s) => s.installmentId === inst.id && applies(s.type, s.feeHeadId, input))
         .flatMap(({ feeHeadId, name, amount }) => {
           const c = input.concessions.find((x) => x.feeHeadId === feeHeadId);
@@ -71,7 +76,7 @@ export function calculateBill(input: BillInput) {
           return off ? [line, { feeHeadId, name: `Less: ${name} concession (${c!.reason})`, amount: -off }] : [line];
         })
         .concat(
-          input.facilityLines
+          (dropped ? [] : input.facilityLines)
             .filter((f) => f.installmentId === inst.id)
             .map((f) => ({ feeHeadId: -f.facilityId, name: f.name, amount: f.amount })),
         );
@@ -102,6 +107,7 @@ export function calculateBill(input: BillInput) {
       // A fine override can drop below what was already paid as fine; that surplus counts toward the charges.
       const chargesDue = Math.max(0, charges - chargesPaid - Math.max(0, finePaid - fine));
       const fineDue = Math.max(0, fine - finePaid);
+      const excess = Math.max(0, chargesPaid + Math.max(0, finePaid - fine) - charges);
 
       return {
         installmentId: inst.id,
@@ -113,6 +119,7 @@ export function calculateBill(input: BillInput) {
         fine,
         fineDays,
         fineOverridden: !!override,
+        excess,
         chargesDue,
         fineDue,
         paid: chargesPaid + finePaid,

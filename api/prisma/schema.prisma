@@ -92,6 +92,7 @@ model Enrollment {
   concessions         Concession[]
   fineAdjustments     FineAdjustment[]
   facilityAssignments FacilityAssignment[]
+  withdrawal          Withdrawal?
 
   @@unique([studentId, yearId])
 }
@@ -237,6 +238,21 @@ model Concession {
   reason       String
 
   @@unique([enrollmentId, feeHeadId])
+}
+
+// A student leaving mid-year. Installments due after `date` stop being charged; the student
+// is marked inactive. balanceDue / excessPaid are the settlement figures when it was recorded.
+model Withdrawal {
+  id           Int        @id @default(autoincrement())
+  enrollmentId Int        @unique
+  enrollment   Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  date         DateTime   @db.Date
+  reason       String
+  remarks      String?
+  balanceDue   Decimal    @db.Decimal(12, 2)
+  excessPaid   Decimal    @db.Decimal(12, 2)
+  createdBy    String
+  createdAt    DateTime   @default(now())
 }
 
 // Replaces the computed late fine of one installment for one student-year with a fixed amount

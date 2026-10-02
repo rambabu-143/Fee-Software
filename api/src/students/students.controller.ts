@@ -120,6 +120,9 @@ export class StudentsController {
     assertSchool(u, existing.schoolId);
     const { yearId, sectionId, rollNo, isNewAdmission, optionalHeadIds, dob, ...student } = dto;
     await this.checkRefs(existing.schoolId, sectionId, optionalHeadIds);
+    if (dto.active === true && (await this.prisma.withdrawal.count({ where: { enrollment: { studentId: id, yearId } } }))) {
+      throw new BadRequestException('Student is withdrawn for this year; re-admit them instead');
+    }
 
     const enrollment = {
       sectionId, rollNo, isNewAdmission,

@@ -15,6 +15,7 @@ import { FacilitiesController } from './masters/facilities.controller.js';
 import { StudentsController } from './students/students.controller.js';
 import { PaymentsController } from './billing/payments.controller.js';
 import { ConcessionsController } from './students/concessions.controller.js';
+import { WithdrawalsController } from './students/withdrawals.controller.js';
 import { FinesController } from './students/fines.controller.js';
 import { StudentFacilitiesController } from './students/facilities.controller.js';
 import { PromotionsController } from './students/promotions.controller.js';
@@ -44,6 +45,7 @@ import { BillingService } from './billing/billing.service.js';
     PaymentsController,
     ConcessionsController,
     FinesController,
+    WithdrawalsController,
     StudentFacilitiesController,
     PromotionsController,
     ReportsController,

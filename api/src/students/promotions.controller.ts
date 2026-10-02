@@ -3,6 +3,12 @@ import { IsArray, IsInt, IsOptional } from 'class-validator';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { assertSchool, CurrentUser, Roles, type AuthUser } from '../auth/auth.guard.js';
 
+class UndoDto {
+  @IsInt() yearId: number;
+  @IsInt() sectionId: number;
+  @IsArray() @IsInt({ each: true }) studentIds: number[];
+}
+
 class PromoteDto {
   @IsInt() fromYearId: number;
   @IsInt() toYearId: number;
@@ -71,5 +77,42 @@ export class PromotionsController {
       ),
     );
     return { promoted: toPromote.length, alreadyEnrolled };
+  }
+
+  // Downgrade: take students out of a section they were promoted into by mistake. Only the
+  // enrollment goes (with its concessions/fines/facilities); a student with any payment in that
+  // year, a withdrawal, a new admission, or no earlier year to fall back to is skipped, never deleted.
+  @Roles('ADMIN')
+  @Post('undo')
+  async undo(@CurrentUser() u: AuthUser, @Body() dto: UndoDto) {
+    const sec = await this.prisma.section.findUniqueOrThrow({ where: { id: dto.sectionId }, include: { standard: true } });
+    assertSchool(u, sec.standard.schoolId);
+    const year = await this.prisma.academicYear.findUniqueOrThrow({ where: { id: dto.yearId } });
+
+    const enrollments = await this.prisma.enrollment.findMany({
+      where: { yearId: dto.yearId, sectionId: dto.sectionId, studentId: { in: dto.studentIds } },
+      include: { student: { select: { admissionNo: true } }, withdrawal: true },
+    });
+    const found = new Set(enrollments.map((e) => e.studentId));
+    const skipped = dto.studentIds.filter((id) => !found.has(id)).map((id) => ({ studentId: id, reason: 'Not enrolled in this section for this year' }));
+
+    const undone: number[] = [];
+    for (const e of enrollments) {
+      const [payments, earlier] = await Promise.all([
+        this.prisma.payment.count({ where: { studentId: e.studentId, yearId: dto.yearId } }),
+        this.prisma.enrollment.count({ where: { studentId: e.studentId, year: { startDate: { lt: year.startDate } } } }),
+      ]);
+      const reason = e.isNewAdmission ? 'New admission, not a promotion'
+        : e.withdrawal ? 'Student is withdrawn'
+        : payments ? 'Has payments in this year'
+        : !earlier ? 'No earlier year to return to'
+        : null;
+      if (reason) skipped.push({ studentId: e.studentId, reason });
+      else {
+        await this.prisma.enrollment.delete({ where: { id: e.id } });
+        undone.push(e.studentId);
+      }
+    }
+    return { undone: undone.length, undoneStudentIds: undone, skipped };
   }
 }

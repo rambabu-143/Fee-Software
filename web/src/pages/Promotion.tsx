@@ -1,4 +1,4 @@
-import { Button, Checkbox, Empty, Select, Space, Table, message } from 'antd'
+import { Alert, Button, Checkbox, Divider, Empty, Popconfirm, Select, Space, Table, Typography, message } from 'antd'
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { useSelection } from '../selection'
@@ -9,6 +9,16 @@ type Candidate = { id: number; admissionNo: string; name: string }
 // Bulk year-end promotion: move every active student of one section into
 // another section for the next year, holding back whoever gets unchecked.
 export default function Promotion() {
+  return (
+    <>
+      <PromoteSection />
+      <Divider />
+      <UndoSection />
+    </>
+  )
+}
+
+function PromoteSection() {
   const { schoolId, years } = useSelection()
   const [standards, setStandards] = useState<Standard[]>([])
   const [fromYearId, setFromYearId] = useState<number>()
@@ -94,6 +104,68 @@ export default function Promotion() {
             Promote {candidates.length - excluded.size} student(s)
           </Button>
         </>
+      )}
+    </>
+  )
+}
+
+type Enrolled = { id: number; admissionNo: string; name: string; enrollment: { sectionId: number } }
+
+// Downgrade: undo a mistaken promotion. Students with payments that year, withdrawals or new admissions are skipped by the server.
+function UndoSection() {
+  const { schoolId, years } = useSelection()
+  const [standards, setStandards] = useState<Standard[]>([])
+  const [yearId, setYearId] = useState<number>()
+  const [sectionId, setSectionId] = useState<number>()
+  const [rows, setRows] = useState<Enrolled[]>([])
+  const [picked, setPicked] = useState<number[]>([])
+  const [skipped, setSkipped] = useState<{ studentId: number; reason: string }[]>([])
+
+  useEffect(() => {
+    if (schoolId) api<Standard[]>(`/standards?schoolId=${schoolId}`).then(setStandards).catch((e) => message.error(e.message))
+  }, [schoolId])
+
+  const load = () => {
+    setPicked([])
+    if (!schoolId || !yearId || !sectionId) return setRows([])
+    api<Enrolled[]>(`/students?schoolId=${schoolId}&yearId=${yearId}`)
+      .then((all) => setRows(all.filter((s) => s.enrollment.sectionId === sectionId)))
+      .catch((e) => message.error(e.message))
+  }
+  useEffect(load, [schoolId, yearId, sectionId])
+
+  async function undo() {
+    try {
+      const r = await api<{ undone: number; skipped: { studentId: number; reason: string }[] }>('/promotions/undo', {
+        method: 'POST', body: JSON.stringify({ yearId, sectionId, studentIds: picked }),
+      })
+      message.success(`Removed ${r.undone} student(s) from this section`)
+      setSkipped(r.skipped)
+      load()
+    } catch (e) {
+      message.error((e as Error).message)
+    }
+  }
+
+  const sectionOptions = standards.flatMap((s) => s.sections.map((sec) => ({ value: sec.id, label: `${s.name} ${sec.name}` })))
+  const name = (id: number) => rows.find((r) => r.id === id)?.name ?? `#${id}`
+
+  return (
+    <>
+      <Typography.Title level={5}>Undo a promotion</Typography.Title>
+      <Space wrap style={{ marginBottom: 16 }}>
+        <Select placeholder="Year" style={{ width: 140 }} value={yearId} onChange={setYearId} options={years.map((y) => ({ value: y.id, label: y.label }))} />
+        <Select placeholder="Class & section" style={{ width: 200 }} value={sectionId} onChange={setSectionId} options={sectionOptions} showSearch optionFilterProp="label" />
+        <Popconfirm title={`Remove ${picked.length} student(s) from this section and year?`} onConfirm={undo} disabled={!picked.length}>
+          <Button danger disabled={!picked.length}>Undo promotion for {picked.length}</Button>
+        </Popconfirm>
+      </Space>
+      {!rows.length ? <Empty description="Pick the year and section the students were promoted into" /> : (
+        <Table rowKey="id" size="small" dataSource={rows} pagination={false} rowSelection={{ selectedRowKeys: picked, onChange: (k) => setPicked(k as number[]) }}
+          columns={[{ title: 'Adm. no.', dataIndex: 'admissionNo' }, { title: 'Name', dataIndex: 'name' }]} />
+      )}
+      {skipped.length > 0 && (
+        <Alert style={{ marginTop: 16 }} type="warning" showIcon message="Not removed" description={skipped.map((s) => `${name(s.studentId)}: ${s.reason}`).join(' · ')} />
       )}
     </>
   )

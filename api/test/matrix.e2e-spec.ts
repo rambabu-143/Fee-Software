@@ -150,6 +150,7 @@ describe('authn/authz matrix + flows (e2e)', () => {
     { m: 'get', p: `/students/${x.studentId}/concessions?yearId=${x.yearId}` },
     { m: 'get', p: `/students/${x.studentId}/facilities?yearId=${x.yearId}` },
     { m: 'get', p: `/students/${x.studentId}/fines?yearId=${x.yearId}` },
+    { m: 'get', p: `/withdrawals?${q(x)}` },
     { m: 'get', p: `/payments?${q(x)}` },
     { m: 'get', p: `/payments/${x.paymentId}` },
     { m: 'get', p: `/payments/${x.paymentId}/pdf` },
@@ -182,6 +183,9 @@ describe('authn/authz matrix + flows (e2e)', () => {
     [{ m: 'patch', p: `/students/${x.studentId}`, b: { yearId: x.yearId, name: 'Same' } }, ['ADMIN', 'ACCOUNTANT']],
     [{ m: 'put', p: `/students/${x.studentId}/concessions`, b: { yearId: x.yearId, items: [] } }, ['ADMIN']],
     [{ m: 'put', p: `/students/${x.studentId}/fines`, b: { yearId: x.yearId, items: [] } }, ['ADMIN']],
+    [{ m: 'post', p: `/students/${x.studentId}/withdrawal`, b: { yearId: x.yearId, date: '2026-05-01', reason: 'authz probe' } }, ['ADMIN', 'ACCOUNTANT']],
+    [{ m: 'delete', p: `/students/${x.studentId}/withdrawal?yearId=${x.yearId}` }, ['ADMIN']],
+    [{ m: 'post', p: '/promotions/undo', b: { yearId: x.yearId, sectionId: x.sectionId, studentIds: [] } }, ['ADMIN']],
     [{ m: 'put', p: `/students/${x.studentId}/facilities`, b: { yearId: x.yearId, kind: 'TRANSPORT' } }, ['ADMIN', 'ACCOUNTANT']],
     [{ m: 'post', p: '/promotions', b: { fromYearId: x.yearId, toYearId: x.yearId, fromSectionId: x.sectionId, toSectionId: x.section2Id, excludeStudentIds: [] } }, ['ADMIN', 'ACCOUNTANT']],
     [{ m: 'post', p: '/payments', b: { studentId: x.studentId, yearId: x.yearId, amount: 99999999, mode: 'CASH' } }, ['ADMIN', 'ACCOUNTANT']],
@@ -581,6 +585,84 @@ describe('authn/authz matrix + flows (e2e)', () => {
       expect(due).toBeGreaterThan(0);
     });
 
+    it('withdrawal: record, charges stop after the leaving date, slip, register, re-admit, authz', async () => {
+      const students = (await call('admin1', { m: 'get', p: `/students?${q(a)}` })).body;
+      const sid = students[5].id;
+      const sidPaid = students[6].id;
+      const bill = async (id: number) => (await call('admin1', { m: 'get', p: `/students/${id}/bill?yearId=${a.yearId}` })).body;
+      const wd = (id: number, over: object = {}, who = 'accountant1') =>
+        call(who, { m: 'post', p: `/students/${id}/withdrawal`, b: { yearId: a.yearId, date: '2026-05-01', reason: 'Relocating', ...over } });
+
+      const before = await bill(sid);
+      expect(before.installments).toHaveLength(4);
+
+      // validation + authz
+      expect((await wd(sid, { date: '2999-01-01' })).status).toBe(400);
+      expect((await wd(sid, { date: 'garbage' })).status).toBe(400);
+      expect((await wd(sid, { reason: 'x' })).status).toBe(400);
+      expect((await wd(sid, { extra: 1 })).status).toBe(400);
+      expect((await wd(sid, { yearId: 999999 })).status).toBe(404);
+      expect((await wd(sid, {}, 'viewer1')).status).toBe(403);
+      expect((await wd(sid, {}, 'admin2')).status).toBe(403);
+      expect((await wd(b.studentId)).status).toBe(403); // another school's student
+      expect((await bill(sid)).totals.charges).toBe(before.totals.charges); // rejected calls changed nothing
+
+      // withdraw on 1 May: only the First installment (due 10 Apr) is still owed
+      const w = await wd(sid, { remarks: 'moved to Pune' });
+      expect(w.status).toBe(201);
+      expect(w.body).toMatchObject({ reason: 'Relocating', remarks: 'moved to Pune', createdBy: 'm-accountant1', excessPaid: '0.00' });
+      const after = await bill(sid);
+      expect(after.installments[0].charges).toBe(before.installments[0].charges);
+      for (const i of after.installments.slice(1)) expect(i).toMatchObject({ charges: '0.00', due: '0.00' });
+      expect(Number(after.totals.charges)).toBeLessThan(Number(before.totals.charges));
+      expect(w.body.balanceDue).toBe(after.totals.due);
+      const stu = (await call('admin1', { m: 'get', p: `/students?${q(a)}&q=${encodeURIComponent(students[5].admissionNo)}` })).body[0];
+      expect(stu.active).toBe(false);
+
+      // second withdrawal, manual reactivation and promotion are all refused
+      expect((await wd(sid)).status).toBe(400);
+      expect((await call('admin1', { m: 'patch', p: `/students/${sid}`, b: { yearId: a.yearId, active: true } })).status).toBe(400);
+      const cands = (await call('admin1', { m: 'get', p: `/promotions/candidates?schoolId=${a.schoolId}&fromYearId=${a.yearId}&fromSectionId=${students[5].enrollment.sectionId}` })).body;
+      expect(cands.some((c: { id: number }) => c.id === sid)).toBe(false);
+
+      // the family can still pay what is owed, and not a paisa more
+      const owed = Number(after.totals.due);
+      expect(owed).toBeGreaterThan(0);
+      expect((await call('accountant1', { m: 'post', p: '/payments', b: { studentId: sid, yearId: a.yearId, amount: owed + 0.01, mode: 'CASH' } })).status).toBe(400);
+      expect((await call('accountant1', { m: 'post', p: '/payments', b: { studentId: sid, yearId: a.yearId, amount: owed, mode: 'CASH' } })).status).toBe(201);
+      expect((await bill(sid)).totals.due).toBe('0.00');
+
+      // register + slip
+      const reg = (await call('viewer1', { m: 'get', p: `/withdrawals?${q(a)}` })).body;
+      expect(reg.map((r: { student: { id: number } }) => r.student.id)).toContain(sid);
+      expect(reg[0]).toMatchObject({ className: expect.any(String), balanceDue: expect.any(String) });
+      expect((await call('root', { m: 'get', p: `/withdrawals?${q(b)}` })).body.some((r: { student: { id: number } }) => r.student.id === sid)).toBe(false);
+      const slip = await call('viewer1', { m: 'get', p: `/students/${sid}/withdrawal/pdf?yearId=${a.yearId}` }).buffer(true).parse((res, cb) => { const c: Buffer[] = []; res.on('data', (d: Buffer) => c.push(d)); res.on('end', () => cb(null, Buffer.concat(c))); });
+      expect(slip.status).toBe(200);
+      expect((slip.body as Buffer).subarray(0, 4).toString()).toBe('%PDF');
+      expect(await status('admin2', { m: 'get', p: `/students/${sid}/withdrawal/pdf?yearId=${a.yearId}` })).toBe(403);
+      expect(await status('viewer1', { m: 'get', p: `/students/${students[7].id}/withdrawal/pdf?yearId=${a.yearId}` })).toBe(400); // not withdrawn
+
+      // prepaid then withdrew: the advance shows up as refundable, nothing is owed
+      const fullDue = Number((await bill(sidPaid)).totals.due);
+      expect((await call('accountant1', { m: 'post', p: '/payments', b: { studentId: sidPaid, yearId: a.yearId, amount: fullDue, mode: 'CASH' } })).status).toBe(201);
+      const wp = await wd(sidPaid, { date: '2026-04-15' });
+      expect(wp.status).toBe(201);
+      expect(wp.body.balanceDue).toBe('0.00');
+      expect(Number(wp.body.excessPaid)).toBeGreaterThan(0);
+
+      // re-admit: admin only; charges come back
+      expect((await call('accountant1', { m: 'delete', p: `/students/${sid}/withdrawal?yearId=${a.yearId}` })).status).toBe(403);
+      expect((await call('admin2', { m: 'delete', p: `/students/${sid}/withdrawal?yearId=${a.yearId}` })).status).toBe(403);
+      expect((await call('admin1', { m: 'delete', p: `/students/${sid}/withdrawal?yearId=${a.yearId}` })).status).toBe(200);
+      expect((await call('admin1', { m: 'delete', p: `/students/${sid}/withdrawal?yearId=${a.yearId}` })).status).toBe(400);
+      expect((await call('admin1', { m: 'delete', p: `/students/${sidPaid}/withdrawal?yearId=${a.yearId}` })).status).toBe(200);
+      expect((await bill(sid)).totals.charges).toBe(before.totals.charges);
+      const back = (await call('admin1', { m: 'get', p: `/students?${q(a)}&q=${encodeURIComponent(students[5].admissionNo)}` })).body[0];
+      expect(back.active).toBe(true);
+      expect((await call('viewer1', { m: 'get', p: `/withdrawals?${q(a)}` })).body).toEqual([]);
+    });
+
     it('dues report: sectionId and installmentId filters, validated and school-scoped', async () => {
       const all = (await call('viewer1', { m: 'get', p: `/reports/dues?${q(a)}&asOf=2030-01-01` })).body as { studentId: number; charges: string; className: string }[];
       const bySection = (await call('viewer1', { m: 'get', p: `/reports/dues?${q(a)}&asOf=2030-01-01&sectionId=${a.sectionId}` })).body as typeof all;
@@ -657,6 +739,59 @@ describe('authn/authz matrix + flows (e2e)', () => {
       expect(next.some((s: { id: number }) => s.id === ids[0])).toBe(false);
       expect.soft((await call('accountant1', { m: 'post', p: '/promotions', b: body({ toYearId: 999999 }) })).status, 'unknown target year').toBeLessThan(500);
       expect.soft((await call('accountant1', { m: 'post', p: '/promotions', b: body({ toYearId: a.yearId, excludeStudentIds: [] }) })).status, 'promote into same year').toBeLessThan(500);
+    });
+
+    it('downgrade (undo promotion): removes only safe enrollments, never fee data', async () => {
+      const inNext = async () => (await call('viewer1', { m: 'get', p: `/students?schoolId=${a.schoolId}&yearId=${nextYearId}` })).body as { id: number; admissionNo: string }[];
+      await call('accountant1', { m: 'post', p: '/promotions', b: { fromYearId: a.yearId, toYearId: nextYearId, fromSectionId: a.sectionId, toSectionId: a.section2Id, excludeStudentIds: [] } });
+      const promoted = await inNext();
+      expect(promoted.length).toBeGreaterThanOrEqual(4);
+      const [withPayment, withdrawn, plain1, plain2] = promoted;
+      const undo = (ids: number[], over: object = {}, who = 'admin1') =>
+        call(who, { m: 'post', p: '/promotions/undo', b: { yearId: nextYearId, sectionId: a.section2Id, studentIds: ids, ...over } });
+
+      // a brand-new admission into the next year is not a promotion
+      const nu = await call('accountant1', { m: 'post', p: '/students', b: { schoolId: a.schoolId, yearId: nextYearId, admissionNo: 'M-NEW', name: 'New Kid', sectionId: a.section2Id, isNewAdmission: true, optionalHeadIds: [] } });
+      expect(nu.status).toBe(201);
+      const school = await prisma.school.findUniqueOrThrow({ where: { id: a.schoolId } });
+      const pay = await prisma.payment.create({ data: { schoolId: school.id, yearId: nextYearId, studentId: withPayment.id, receiptNo: 1, date: new Date('2026-10-01'), mode: 'CASH', amount: '10.00', createdBy: 'e2e' } });
+      expect((await call('accountant1', { m: 'post', p: `/students/${withdrawn.id}/withdrawal`, b: { yearId: nextYearId, date: '2026-10-01', reason: 'left early' } })).status).toBe(201);
+
+      // authz + validation
+      expect((await undo([plain1.id], {}, 'accountant1')).status).toBe(403);
+      expect((await undo([plain1.id], {}, 'viewer1')).status).toBe(403);
+      expect((await undo([plain1.id], {}, 'admin2')).status).toBe(403);
+      expect((await undo([plain1.id], { sectionId: 999999 })).status).toBe(404);
+      expect((await undo([plain1.id], { yearId: 999999 })).status).toBe(404);
+      expect((await undo(['x' as unknown as number])).status).toBe(400);
+      expect((await undo([plain1.id], { extra: 1 })).status).toBe(400);
+      expect((await undo([])).body).toMatchObject({ undone: 0, skipped: [] });
+      expect((await inNext()).length).toBe(promoted.length + 1);
+
+      const outsider = (await call('viewer1', { m: 'get', p: `/students?${q(a)}` })).body.find((x: { enrollment: { sectionId: number } }) => x.enrollment.sectionId !== a.sectionId && x.enrollment.sectionId !== a.section2Id).id;
+      const res = await undo([withPayment.id, withdrawn.id, nu.body.id, plain1.id, plain2.id, outsider]);
+      expect(res.status).toBe(201);
+      expect(res.body.undone).toBe(2);
+      expect(res.body.undoneStudentIds.sort()).toEqual([plain1.id, plain2.id].sort());
+      const why = Object.fromEntries(res.body.skipped.map((x: { studentId: number; reason: string }) => [x.studentId, x.reason]));
+      expect(why[withPayment.id]).toBe('Has payments in this year');
+      expect(why[withdrawn.id]).toBe('Student is withdrawn');
+      expect(why[nu.body.id]).toBe('New admission, not a promotion');
+      expect(why[outsider]).toBe('Not enrolled in this section for this year');
+
+      const left = (await inNext()).map((x) => x.id);
+      expect(left).not.toContain(plain1.id);
+      expect(left).toEqual(expect.arrayContaining([withPayment.id, withdrawn.id, nu.body.id]));
+      // their current-year enrollment and bill are untouched
+      expect((await call('viewer1', { m: 'get', p: `/students/${plain1.id}/bill?yearId=${a.yearId}` })).status).toBe(200);
+      expect(await prisma.payment.count({ where: { id: pay.id } })).toBe(1); // payment record survives
+      // undoing twice does nothing
+      expect((await undo([plain1.id])).body).toMatchObject({ undone: 0 });
+      // and the section can be promoted again
+      const again = await call('accountant1', { m: 'post', p: '/promotions', b: { fromYearId: a.yearId, toYearId: nextYearId, fromSectionId: a.sectionId, toSectionId: a.section2Id, excludeStudentIds: [] } });
+      expect(again.status).toBe(201);
+      expect(again.body.promoted).toBeGreaterThanOrEqual(2);
+      await prisma.payment.delete({ where: { id: pay.id } });
     });
   });
 });

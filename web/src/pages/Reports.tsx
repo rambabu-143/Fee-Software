@@ -123,6 +123,7 @@ export default function Reports() {
         ),
       },
       { key: 'collection', label: 'Daily collection', children: <Collection /> },
+      { key: 'withdrawals', label: 'Withdrawals', children: <Withdrawals /> },
     ]} />
   )
 }
@@ -174,6 +175,37 @@ function Collection() {
             <Table.Summary.Cell index={modes.length + 2} align="right">{sum(days, (d) => d.receipts)}</Table.Summary.Cell>
           </Table.Summary.Row>
         )} />
+    </>
+  )
+}
+
+type Wd = { id: number; date: string; reason: string; remarks: string | null; balanceDue: string; excessPaid: string; createdBy: string; className: string; student: { id: number; admissionNo: string; name: string } }
+
+function Withdrawals() {
+  const { schoolId, yearId } = useSelection()
+  const [rows, setRows] = useState<Wd[]>([])
+
+  useEffect(() => {
+    if (!schoolId || !yearId) return
+    api<Wd[]>(`/withdrawals?schoolId=${schoolId}&yearId=${yearId}`).then(setRows).catch((e) => message.error(e.message))
+  }, [schoolId, yearId])
+
+  return (
+    <>
+      <Space wrap style={{ marginBottom: 16 }}>
+        <span>{rows.length} withdrawn · payable <b>{money(sum(rows, (r) => r.balanceDue))}</b> · refundable <b>{money(sum(rows, (r) => r.excessPaid))}</b></span>
+        <Button onClick={() => downloadCsv('withdrawals', ['Adm. no.', 'Name', 'Class', 'Date', 'Reason', 'Remarks', 'Payable', 'Refundable', 'By'],
+          rows.map((r) => [r.student.admissionNo, r.student.name, r.className, r.date.slice(0, 10), r.reason, r.remarks ?? '', r.balanceDue, r.excessPaid, r.createdBy]))}>CSV</Button>
+      </Space>
+      <Table rowKey="id" dataSource={rows} size="small" scroll={{ x: true }} pagination={{ pageSize: 50 }} columns={[
+        { title: 'Adm. no.', render: (_, r) => r.student.admissionNo },
+        { title: 'Name', render: (_, r) => r.student.name },
+        { title: 'Class', dataIndex: 'className' },
+        { title: 'Left on', dataIndex: 'date', render: (v: string) => v.slice(0, 10) },
+        { title: 'Reason', dataIndex: 'reason' },
+        { title: 'Payable', dataIndex: 'balanceDue', align: 'right', render: inr },
+        { title: 'Refundable', dataIndex: 'excessPaid', align: 'right', render: inr },
+      ]} />
     </>
   )
 }
