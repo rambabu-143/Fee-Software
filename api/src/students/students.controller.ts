@@ -3,8 +3,9 @@ import {
 } from '@nestjs/common';
 import { OmitType, PartialType } from '@nestjs/mapped-types';
 import {
-  IsArray, IsBoolean, IsDateString, IsEmail, IsInt, IsOptional, IsString, MinLength,
+  IsArray, IsBoolean, IsDateString, IsEmail, IsEnum, IsInt, IsOptional, IsString, MinLength,
 } from 'class-validator';
+import { Gender } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { assertSchool, CurrentUser, Roles, type AuthUser } from '../auth/auth.guard.js';
 import { BillingService } from '../billing/billing.service.js';
@@ -20,6 +21,19 @@ class StudentDto {
   @IsOptional() @IsString() motherName?: string;
   @IsOptional() @IsString() phone?: string;
   @IsOptional() @IsEmail() email?: string;
+  @IsOptional() @IsEnum(Gender) gender?: Gender;
+  @IsOptional() @IsString() religion?: string;
+  @IsOptional() @IsString() category?: string;
+  @IsOptional() @IsString() nationality?: string;
+  @IsOptional() @IsString() aadhaar?: string;
+  @IsOptional() @IsString() penNo?: string;
+  @IsOptional() @IsString() cbseRegNo?: string;
+  @IsOptional() @IsString() address?: string;
+  @IsOptional() @IsDateString() admissionDate?: string;
+  @IsOptional() @IsEmail() fatherEmail?: string;
+  @IsOptional() @IsEmail() motherEmail?: string;
+  // Students sharing a familyId are siblings (sibling report).
+  @IsOptional() @IsInt() familyId?: number;
   @IsInt() sectionId: number;
   @IsOptional() @IsInt() rollNo?: number;
   @IsBoolean() isNewAdmission: boolean;
@@ -66,7 +80,7 @@ export class StudentsController {
       },
       include: enrollmentInclude(yearId),
       orderBy: { admissionNo: 'asc' },
-      take: 500, // ponytail: hard cap instead of pagination; paginate when a school passes this
+      take: 5000, // ponytail: hard cap instead of pagination (500 truncated a 600-student school); paginate past 5000
     });
     return rows.map(({ enrollments: [e], ...s }) => ({
       ...s,
@@ -75,6 +89,7 @@ export class StudentsController {
         standardId: e.section.standardId,
         className: `${e.section.standard.name} ${e.section.name}`,
         rollNo: e.rollNo,
+        enrollmentId: e.id,
         isNewAdmission: e.isNewAdmission,
         optionalHeadIds: e.optionalHeads.map((h) => h.id),
       },
@@ -96,13 +111,14 @@ export class StudentsController {
   @Roles('ADMIN', 'ACCOUNTANT')
   @Post()
   async create(@CurrentUser() u: AuthUser, @Body() dto: StudentDto) {
-    const { yearId, sectionId, rollNo, isNewAdmission, optionalHeadIds, dob, ...student } = dto;
+    const { yearId, sectionId, rollNo, isNewAdmission, optionalHeadIds, dob, admissionDate, ...student } = dto;
     assertSchool(u, dto.schoolId);
     await this.checkRefs(dto.schoolId, sectionId, optionalHeadIds);
     return this.prisma.student.create({
       data: {
         ...student,
         dob: dob ? new Date(dob) : undefined,
+        admissionDate: admissionDate ? new Date(admissionDate) : undefined,
         enrollments: {
           create: {
             yearId, sectionId, rollNo, isNewAdmission,
@@ -118,7 +134,7 @@ export class StudentsController {
   async update(@CurrentUser() u: AuthUser, @Param('id', ParseIntPipe) id: number, @Body() dto: UpdateStudentDto) {
     const existing = await this.prisma.student.findUniqueOrThrow({ where: { id } });
     assertSchool(u, existing.schoolId);
-    const { yearId, sectionId, rollNo, isNewAdmission, optionalHeadIds, dob, ...student } = dto;
+    const { yearId, sectionId, rollNo, isNewAdmission, optionalHeadIds, dob, admissionDate, ...student } = dto;
     await this.checkRefs(existing.schoolId, sectionId, optionalHeadIds);
     if (dto.active === true && (await this.prisma.withdrawal.count({ where: { enrollment: { studentId: id, yearId } } }))) {
       throw new BadRequestException('Student is withdrawn for this year; re-admit them instead');
@@ -129,7 +145,7 @@ export class StudentsController {
       ...(optionalHeadIds ? { optionalHeads: { set: optionalHeadIds.map((hid) => ({ id: hid })) } } : {}),
     };
     return this.prisma.$transaction(async (tx) => {
-      await tx.student.update({ where: { id }, data: { ...student, ...(dob ? { dob: new Date(dob) } : {}) } });
+      await tx.student.update({ where: { id }, data: { ...student, ...(dob ? { dob: new Date(dob) } : {}), ...(admissionDate ? { admissionDate: new Date(admissionDate) } : {}) } });
       const current = await tx.enrollment.findUnique({ where: { studentId_yearId: { studentId: id, yearId } } });
       if (current) {
         await tx.enrollment.update({ where: { id: current.id }, data: enrollment });

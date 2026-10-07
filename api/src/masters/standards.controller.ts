@@ -2,7 +2,7 @@ import {
   Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Query,
 } from '@nestjs/common';
 import { PartialType } from '@nestjs/mapped-types';
-import { IsInt, IsString, MinLength } from 'class-validator';
+import { IsInt, IsOptional, IsString, MinLength } from 'class-validator';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { assertSchool, CurrentUser, Roles, type AuthUser } from '../auth/auth.guard.js';
 
@@ -16,6 +16,11 @@ class UpdateStandardDto extends PartialType(StandardDto) {}
 class SectionDto {
   @IsInt() standardId: number;
   @IsString() @MinLength(1) name: string;
+  @IsOptional() @IsString() classTeacher?: string;
+}
+class UpdateSectionDto {
+  @IsOptional() @IsString() @MinLength(1) name?: string;
+  @IsOptional() @IsString() classTeacher?: string;
 }
 
 // Classes and their sections.
@@ -60,6 +65,14 @@ export class StandardsController {
   async createSection(@CurrentUser() u: AuthUser, @Body() dto: SectionDto) {
     assertSchool(u, (await this.prisma.standard.findUniqueOrThrow({ where: { id: dto.standardId } })).schoolId);
     return this.prisma.section.create({ data: dto });
+  }
+
+  @Roles('ADMIN')
+  @Patch('sections/:id')
+  async updateSection(@CurrentUser() u: AuthUser, @Param('id', ParseIntPipe) id: number, @Body() dto: UpdateSectionDto) {
+    const s = await this.prisma.section.findUniqueOrThrow({ where: { id }, include: { standard: true } });
+    assertSchool(u, s.standard.schoolId);
+    return this.prisma.section.update({ where: { id }, data: dto });
   }
 
   @Roles('ADMIN')

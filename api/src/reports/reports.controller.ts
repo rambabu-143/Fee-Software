@@ -39,14 +39,15 @@ export class ReportsController {
     const bills = await this.billing.buildMany(yearId, at, { schoolId, standardId, sectionId });
     return bills
       .map((b) => ({ ...b, installments: installmentId ? b.installments.filter((i) => i.installmentId === installmentId) : b.installments }))
-      .map((b) => ({ ...b, totals: { charges: sumOf(b, 'charges'), fine: sumOf(b, 'fine'), paid: sumOf(b, 'paid'), due: sumOf(b, 'due') } }))
+      // b.totals already folds in the carried arrear; a per-installment view leaves it out.
+      .map((b) => ({ ...b, totals: installmentId ? { charges: sumOf(b, 'charges'), fine: sumOf(b, 'fine'), paid: sumOf(b, 'paid'), due: sumOf(b, 'due') } : b.totals }))
       .filter((b) => !installmentId || b.installments.length > 0)
       .map((b) => ({
         studentId: b.student.id, admissionNo: b.student.admissionNo, name: b.student.name, active: b.student.active,
         className: b.student.className, standardId: b.student.standardId, standard: b.student.standard, sortOrder: b.student.sortOrder,
         charges: fromPaise(b.totals.charges), fine: fromPaise(b.totals.fine), paid: fromPaise(b.totals.paid), due: fromPaise(b.totals.due),
         // Only installments already past their due date.
-        overdue: fromPaise(b.installments.filter((i) => i.dueDate <= at).reduce((s, i) => s + i.due, 0)),
+        overdue: fromPaise(b.installments.filter((i) => i.dueDate <= at).reduce((s, i) => s + i.due, 0) + (installmentId ? 0 : b.arrear.due)),
       }))
       .sort((a, b) => a.sortOrder - b.sortOrder || a.className.localeCompare(b.className) || a.admissionNo.localeCompare(b.admissionNo));
   }
@@ -118,7 +119,7 @@ export class ReportsController {
     const f = day(from, 'from'), t = day(to, 'to');
     const rows = await this.prisma.payment.groupBy({
       by: ['date', 'mode'],
-      where: { schoolId, yearId, cancelledAt: null, ...(f || t ? { date: { ...(f && { gte: f }), ...(t && { lte: t }) } } : {}) },
+      where: { schoolId, yearId, cancelledAt: null, clearStatus: { not: 'BOUNCED' }, ...(f || t ? { date: { ...(f && { gte: f }), ...(t && { lte: t }) } } : {}) },
       _sum: { amount: true },
       _count: true,
       orderBy: [{ date: 'asc' }, { mode: 'asc' }],

@@ -5,6 +5,8 @@ import { useSelection } from '../selection'
 import { BillView, type Bill } from '../bill'
 import { ReceiptModal, modes, type Receipt } from '../receipt'
 
+type Bank = { id: number; name: string; active: boolean }
+
 type StudentRow = { id: number; admissionNo: string; name: string; enrollment: { className: string } }
 const today = () => new Date().toISOString().slice(0, 10)
 
@@ -15,6 +17,7 @@ export default function CollectFee() {
   const [bill, setBill] = useState<Bill | null>(null)
   const [receipt, setReceipt] = useState<Receipt | null>(null)
   const [saving, setSaving] = useState(false)
+  const [banks, setBanks] = useState<Bank[]>([])
   const [form] = Form.useForm()
   const mode = Form.useWatch('mode', form)
   const date = Form.useWatch('date', form)
@@ -25,6 +28,11 @@ export default function CollectFee() {
     setStudentId(undefined)
     api<StudentRow[]>(`/students?schoolId=${schoolId}&yearId=${yearId}`).then(setStudents).catch((e) => message.error(e.message))
   }, [schoolId, yearId])
+
+  // Bank master is ADMIN/ACCOUNTANT only; a 403 just leaves the bank list empty.
+  useEffect(() => {
+    if (schoolId) api<Bank[]>(`/banks?schoolId=${schoolId}`).then((b) => setBanks(b.filter((x) => x.active))).catch(() => setBanks([]))
+  }, [schoolId])
 
   const loadBill = async () => {
     if (!studentId || !date) return setBill(null)
@@ -39,9 +47,14 @@ export default function CollectFee() {
   async function collect(values: Record<string, unknown>) {
     setSaving(true)
     try {
-      const r = await api<Receipt>('/payments', { method: 'POST', body: JSON.stringify({ ...values, studentId, yearId }) })
+      // Send only the fields that belong to the chosen mode (the API rejects a bank/cheque on cash).
+      // A cheque's reference is its number; other non-cash modes keep the typed reference.
+      const { bankId, chequeNo, chequeDate, reference, ...rest } = values as Record<string, string | number | undefined>
+      const extra = rest.mode === 'CHEQUE' ? { bankId, chequeNo, chequeDate: chequeDate || undefined, reference: chequeNo }
+        : rest.mode === 'CASH' ? {} : { reference, bankId }
+      const r = await api<Receipt>('/payments', { method: 'POST', body: JSON.stringify({ ...rest, ...extra, studentId, yearId }) })
       setReceipt(r)
-      form.setFieldsValue({ reference: undefined, remarks: undefined })
+      form.setFieldsValue({ reference: undefined, chequeNo: undefined, chequeDate: undefined, remarks: undefined })
       await loadBill()
     } catch (e) {
       message.error((e as Error).message)
@@ -68,10 +81,28 @@ export default function CollectFee() {
             <Form.Item name="mode" label="Mode">
               <Select options={modes} style={{ width: 150 }} />
             </Form.Item>
-            {mode !== 'CASH' && (
-              <Form.Item name="reference" label="Reference" rules={[{ required: true, min: 3 }]}>
-                <Input placeholder="Cheque / txn no." />
-              </Form.Item>
+            {mode === 'CHEQUE' && (
+              <>
+                <Form.Item name="bankId" label="Bank" rules={[{ required: true, message: 'Select the cheque\'s bank' }]} preserve={false}>
+                  <Select style={{ width: 200 }} placeholder="Bank" options={banks.map((b) => ({ value: b.id, label: b.name }))} />
+                </Form.Item>
+                <Form.Item name="chequeNo" label="Cheque no." rules={[{ required: true, min: 3, message: 'At least 3 characters' }]} preserve={false}>
+                  <Input />
+                </Form.Item>
+                <Form.Item name="chequeDate" label="Cheque date" preserve={false}>
+                  <Input type="date" />
+                </Form.Item>
+              </>
+            )}
+            {mode && mode !== 'CASH' && mode !== 'CHEQUE' && (
+              <>
+                <Form.Item name="reference" label="Reference" rules={[{ required: true, min: 3, message: 'At least 3 characters' }]} preserve={false}>
+                  <Input placeholder="Txn / UTR no." />
+                </Form.Item>
+                <Form.Item name="bankId" label="Received in" preserve={false}>
+                  <Select allowClear style={{ width: 200 }} placeholder="Bank (optional)" options={banks.map((b) => ({ value: b.id, label: b.name }))} />
+                </Form.Item>
+              </>
             )}
             <Form.Item name="remarks" label="Remarks">
               <Input />

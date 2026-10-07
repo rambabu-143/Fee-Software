@@ -70,7 +70,7 @@ export class WithdrawalsController {
         where: { id: created.id },
         data: {
           balanceDue: fromPaise(bill.totals.due),
-          excessPaid: fromPaise(bill.installments.reduce((s, i) => s + i.excess, 0)),
+          excessPaid: fromPaise(bill.installments.reduce((s, i) => s + i.excess, 0) + bill.arrear.excess),
         },
       });
     });
@@ -103,7 +103,7 @@ export class WithdrawalsController {
     const b = BillingService.present(bill);
     const buf = await withdrawalPdf(school.name, {
       ...b, year: year.label, date: e.withdrawal.date, reason: e.withdrawal.reason, remarks: e.withdrawal.remarks,
-      excess: fromPaise(bill.installments.reduce((s, i) => s + i.excess, 0)), recordedBy: e.withdrawal.createdBy,
+      excess: fromPaise(bill.installments.reduce((s, i) => s + i.excess, 0) + bill.arrear.excess), recordedBy: e.withdrawal.createdBy,
     });
     return new StreamableFile(buf, { disposition: `inline; filename="withdrawal-${bill.student.admissionNo}.pdf"` });
   }

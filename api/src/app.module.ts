@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { APP_FILTER, APP_GUARD } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
 import { PrismaModule } from './prisma/prisma.service.js';
 import { PrismaErrorFilter } from './prisma/prisma-error.filter.js';
@@ -24,10 +24,39 @@ import { PromotionsController } from './students/promotions.controller.js';
 import { ReportsController } from './reports/reports.controller.js';
 import { UsersController } from './auth/users.controller.js';
 import { BillingService } from './billing/billing.service.js';
+import { ArrearsModule } from './arrears/arrears.module.js';
+import { DepositsModule } from './deposits/deposits.module.js';
+import { VouchersModule } from './vouchers/vouchers.module.js';
+import { BanksModule } from './banks/banks.module.js';
+import { RenewalsModule } from './renewals/renewals.module.js';
+import { DocumentsModule } from './documents/documents.module.js';
+import { GuardiansModule } from './guardians/guardians.module.js';
+import { ReportsExtraModule } from './reports-extra/reports-extra.module.js';
+import { SmsModule } from './sms/sms.module.js';
+import { EmailModule } from './email/email.module.js';
+import { ImportModule } from './import/import.module.js';
+import { AuditModule } from './audit/audit.module.js';
+import { SettingsModule } from './settings/settings.module.js';
+import { DefaultersModule } from './defaulters/defaulters.module.js';
+import { AuditInterceptor } from './audit/audit.interceptor.js';
 
 @Module({
   imports: [
     PrismaModule,
+    ArrearsModule,
+    DepositsModule,
+    VouchersModule,
+    BanksModule,
+    RenewalsModule,
+    DocumentsModule,
+    GuardiansModule,
+    ReportsExtraModule,
+    SmsModule,
+    EmailModule,
+    ImportModule,
+    AuditModule,
+    SettingsModule,
+    DefaultersModule,
     JwtModule.register({
       global: true,
       secret: process.env.JWT_SECRET,
@@ -58,6 +87,7 @@ import { BillingService } from './billing/billing.service.js';
   providers: [
     BillingService,
     { provide: APP_GUARD, useClass: AuthGuard },
+    { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },
     { provide: APP_FILTER, useClass: PrismaErrorFilter },
   ],
 })

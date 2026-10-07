@@ -3,13 +3,15 @@ import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { useSelection } from '../selection'
 
-type Section = { id: number; name: string }
+type Section = { id: number; name: string; classTeacher?: string | null }
 type Standard = { id: number; name: string; sortOrder: number; sections: Section[] }
 
 export default function Classes() {
   const { schoolId } = useSelection()
   const [rows, setRows] = useState<Standard[]>([])
   const [editing, setEditing] = useState<Partial<Standard> | null>(null)
+  const [teacher, setTeacher] = useState<Section | null>(null)
+  const [teacherName, setTeacherName] = useState('')
   const [form] = Form.useForm()
 
   const run = (p: Promise<unknown>) => p.then(load).catch((e) => message.error(e.message))
@@ -23,6 +25,10 @@ export default function Classes() {
       ? api(`/standards/${editing.id}`, { method: 'PATCH', body: JSON.stringify(values) })
       : api('/standards', { method: 'POST', body: JSON.stringify({ ...values, schoolId }) })
     run(req.then(() => setEditing(null)))
+  }
+
+  function saveTeacher() {
+    run(api(`/sections/${teacher!.id}`, { method: 'PATCH', body: JSON.stringify({ classTeacher: teacherName.trim() }) }).then(() => setTeacher(null)))
   }
 
   function addSection(standardId: number, input: HTMLInputElement) {
@@ -48,11 +54,16 @@ export default function Classes() {
           render: (_, r) => (
             <Space wrap>
               {r.sections.map((s) => (
-                <Tag key={s.id} closable onClose={(e) => {
-                  e.preventDefault()
-                  run(api(`/sections/${s.id}`, { method: 'DELETE' }))
-                }}>
-                  {s.name}
+                <Tag key={s.id} closable style={{ cursor: 'pointer' }} title="Click to set class teacher"
+                  onClick={() => {
+                    setTeacherName(s.classTeacher ?? '')
+                    setTeacher(s)
+                  }}
+                  onClose={(e) => {
+                    e.preventDefault()
+                    run(api(`/sections/${s.id}`, { method: 'DELETE' }))
+                  }}>
+                  {s.name}{s.classTeacher ? ` · ${s.classTeacher}` : ''}
                 </Tag>
               ))}
               <Input size="small" placeholder="+ Section, Enter" style={{ width: 130 }}
@@ -84,6 +95,9 @@ export default function Classes() {
             <InputNumber min={0} style={{ width: '100%' }} />
           </Form.Item>
         </Form>
+      </Modal>
+      <Modal title={`Class teacher, section ${teacher?.name ?? ''}`} open={!!teacher} onCancel={() => setTeacher(null)} onOk={saveTeacher}>
+        <Input value={teacherName} onChange={(e) => setTeacherName(e.target.value)} placeholder="Class teacher name (printed on concession forms)" />
       </Modal>
     </>
   )

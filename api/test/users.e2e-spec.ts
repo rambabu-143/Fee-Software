@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
+import { listen } from './support.js';
 import { AppModule } from './../src/app.module.js';
 import { PrismaService } from './../src/prisma/prisma.service.js';
 
@@ -9,7 +10,8 @@ import { PrismaService } from './../src/prisma/prisma.service.js';
 describe('users (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
-  const http = () => request(app.getHttpServer());
+  let base = '';
+  const http = () => request(base);
   const login = async (username: string, password: string) =>
     ({ Authorization: `Bearer ${(await http().post('/api/auth/login').send({ username, password }).expect(201)).body.token}` });
 
@@ -19,6 +21,7 @@ describe('users (e2e)', () => {
     app.setGlobalPrefix('api');
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }));
     await app.init();
+    base = await listen(app);
     prisma = app.get(PrismaService);
     await prisma.user.deleteMany({ where: { username: { startsWith: 'e2e-' } } });
   });

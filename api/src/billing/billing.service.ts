@@ -5,6 +5,12 @@ import { calculateBill, fromPaise, toPaise } from './bill.js';
 
 type Db = Prisma.TransactionClient;
 
+// Paise owed (positive) or credited (negative) after any waiver; a waiver only trims a positive arrear.
+export const netArrear = (c: { amount: Prisma.Decimal; waivedAmount: Prisma.Decimal }) => {
+  const amount = toPaise(c.amount.toFixed(2));
+  return amount > 0 ? Math.max(0, amount - toPaise(c.waivedAmount.toFixed(2))) : amount;
+};
+
 // Loads everything a student's bill needs and runs the pure engine.
 @Injectable()
 export class BillingService {
@@ -39,6 +45,7 @@ export class BillingService {
         concessions: true,
         fineAdjustments: true,
         withdrawal: true,
+        arrearCarry: true,
         facilityAssignments: { include: { facility: true } },
         transport: { include: { pickupStop: { include: { route: true } }, dropStop: { include: { route: true } } } },
       },
@@ -58,7 +65,7 @@ export class BillingService {
         include: { feeHead: true },
       }),
       db.paymentAllocation.findMany({
-        where: { payment: { studentId: { in: studentIds }, yearId, cancelledAt: null } },
+        where: { payment: { studentId: { in: studentIds }, yearId, cancelledAt: null, clearStatus: { not: 'BOUNCED' } } },
         include: { payment: { select: { date: true, studentId: true } } },
       }),
       facilityIds.length
@@ -87,8 +94,10 @@ export class BillingService {
           .filter((a) => a.payment.studentId === e.studentId)
           .map((a) => ({
             installmentId: a.installmentId, date: a.payment.date,
-            charges: toPaise(a.charges.toFixed(2)), fine: toPaise(a.fine.toFixed(2)),
+            charges: toPaise(a.charges.toFixed(2)), fine: toPaise(a.fine.toFixed(2)), arrear: toPaise(a.arrear.toFixed(2)),
           })),
+        // A waiver only trims a positive arrear; a credit is left as is.
+        arrear: e.arrearCarry ? netArrear(e.arrearCarry) : 0,
         concessions: e.concessions.map((c) => ({
           feeHeadId: c.feeHeadId, reason: c.reason,
           percent: c.percent === null ? null : Number(c.percent), amount: c.amount === null ? null : toPaise(c.amount.toFixed(2)),
@@ -136,6 +145,7 @@ export class BillingService {
         lines: i.lines.map((l) => ({ ...l, amount: m(l.amount) })),
         charges: m(i.charges), fine: m(i.fine), paid: m(i.paid), due: m(i.due),
       })),
+      arrear: { amount: m(bill.arrear.amount), paid: m(bill.arrear.paid), due: m(bill.arrear.due), excess: m(bill.arrear.excess) },
       totals: {
         charges: m(bill.totals.charges), fine: m(bill.totals.fine), paid: m(bill.totals.paid), due: m(bill.totals.due),
       },

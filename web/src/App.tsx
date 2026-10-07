@@ -17,6 +17,20 @@ import CollectFee from './pages/CollectFee'
 import Receipts from './pages/Receipts'
 import Reports from './pages/Reports'
 import Users from './pages/Users'
+import Arrears from './pages/Arrears'
+import Deposits from './pages/Deposits'
+import Vouchers from './pages/Vouchers'
+import Banking from './pages/Banking'
+import Renewals from './pages/Renewals'
+import Documents from './pages/Documents'
+import Defaulters from './pages/Defaulters'
+import Messaging from './pages/Messaging'
+import MoreReports from './pages/MoreReports'
+import Masters2 from './pages/Masters2'
+import Import from './pages/Import'
+import QrSheet from './pages/QrSheet'
+import Audit from './pages/Audit'
+import Settings from './pages/Settings'
 
 const pages = [
   ['/collect', 'Collect Fee', CollectFee],
@@ -33,6 +47,20 @@ const pages = [
   ['/years', 'Academic Years', Years],
   ['/schools', 'Schools', Schools],
   ['/users', 'Users', Users],
+  ['/arrears', 'Arrears', Arrears],
+  ['/deposits', 'Deposits', Deposits],
+  ['/vouchers', 'Refund Vouchers', Vouchers],
+  ['/banking', 'Banking', Banking],
+  ['/renewals', 'Transport Renewals', Renewals],
+  ['/documents', 'Documents (TC etc.)', Documents],
+  ['/defaulters', 'Defaulters', Defaulters],
+  ['/messaging', 'SMS & Email', Messaging],
+  ['/more-reports', 'More Reports', MoreReports],
+  ['/occupations-subjects', 'Occupations & Subjects', Masters2],
+  ['/import', 'Bulk Import', Import],
+  ['/qr', 'QR Sheet', QrSheet],
+  ['/audit', 'Audit Log', Audit],
+  ['/settings', 'Settings', Settings],
 ] as const
 
 function Pickers() {

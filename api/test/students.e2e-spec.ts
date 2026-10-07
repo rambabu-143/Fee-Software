@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
+import { listen } from './support.js';
 import { AppModule } from './../src/app.module.js';
 import { PrismaService } from './../src/prisma/prisma.service.js';
 
@@ -10,8 +11,9 @@ describe('students & bills (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
   let auth: { Authorization: string };
-  const http = () => request(app.getHttpServer());
-  const admissionNo = `E2E-${Date.now()}`;
+  let base = '';
+  const http = () => request(base);
+  const admissionNo = `E2E-STU-${Date.now()}`;
 
   beforeAll(async () => {
     const mod = await Test.createTestingModule({ imports: [AppModule] }).compile();
@@ -19,6 +21,7 @@ describe('students & bills (e2e)', () => {
     app.setGlobalPrefix('api');
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }));
     await app.init();
+    base = await listen(app);
     prisma = app.get(PrismaService);
     const login = await http()
       .post('/api/auth/login')
@@ -27,7 +30,7 @@ describe('students & bills (e2e)', () => {
   });
 
   afterAll(async () => {
-    const s = await prisma.student.findMany({ where: { admissionNo: { startsWith: 'E2E-' } } });
+    const s = await prisma.student.findMany({ where: { admissionNo: { startsWith: 'E2E-STU-' } } });
     const ids = s.map((x) => x.id);
     await prisma.paymentAllocation.deleteMany({ where: { payment: { studentId: { in: ids } } } });
     await prisma.payment.deleteMany({ where: { studentId: { in: ids } } });
@@ -75,7 +78,7 @@ describe('students & bills (e2e)', () => {
     const c1 = await ctx('DEMO1');
     const c2 = await ctx('DEMO2');
     const body = { schoolId: c1.schoolId, yearId: c1.yearId, name: 'X', isNewAdmission: false, optionalHeadIds: [] };
-    await http().post('/api/students').set(auth).send({ ...body, admissionNo: `E2E-x${Date.now()}`, sectionId: c2.sectionId }).expect(400);
+    await http().post('/api/students').set(auth).send({ ...body, admissionNo: `E2E-STU-x${Date.now()}`, sectionId: c2.sectionId }).expect(400);
     await http().post('/api/students').set(auth).send({ ...body, admissionNo, sectionId: c1.sectionId }).expect(409);
   });
 

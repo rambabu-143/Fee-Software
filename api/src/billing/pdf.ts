@@ -83,7 +83,7 @@ function table(doc: PDFKit.PDFDocument, cols: Col[], rows: string[][], boldLast 
 
 export type ReceiptPdf = {
   receiptNo: number; date: Date; mode: string; reference: string | null; remarks: string | null; amount: string
-  createdBy: string; cancelledAt: Date | null; cancelReason: string | null
+  createdBy: string; cancelledAt: Date | null; cancelReason: string | null; clearStatus?: string
   student: { admissionNo: string; name: string }; year: string
   allocations: { installment: string; charges: string; fine: string }[]
 };
@@ -106,6 +106,11 @@ export function receiptPdf(school: string, r: ReceiptPdf) {
       doc.fillColor('red').text(`Cancelled: ${r.cancelReason}`, { align: 'right' });
       doc.save().rotate(-30, { origin: [doc.page.width / 2, doc.page.height / 2] })
         .fontSize(48).fillColor('red', 0.25).text('CANCELLED', 60, doc.page.height / 2 - 30, { align: 'center' }).restore();
+    } else if (r.clearStatus === 'BOUNCED') {
+      // A bounced cheque no longer counts as paid, so its receipt must not look valid.
+      doc.fillColor('red').text('Payment bounced: this receipt is not valid', { align: 'right' });
+      doc.save().rotate(-30, { origin: [doc.page.width / 2, doc.page.height / 2] })
+        .fontSize(48).fillColor('red', 0.25).text('BOUNCED', 60, doc.page.height / 2 - 30, { align: 'center' }).restore();
     }
   });
 }
@@ -114,7 +119,12 @@ export type BillPdf = {
   student: { admissionNo: string; name: string; className: string }; year: string; asOf: string
   installments: { label: string; dueDate: Date; charges: string; fine: string; fineDays: number; paid: string; due: string }[]
   totals: { charges: string; fine: string; paid: string; due: string }
+  arrear?: { amount: string; paid: string; due: string }
 };
+
+// Previous-year arrear shows as its own row so the installment rows still add up to the totals.
+const arrearRow = (a: BillPdf['arrear'], n: (v: string) => string) =>
+  a && Number(a.amount) > 0 ? [['Prev. arrear', '', n(a.amount), n('0'), n(a.paid), n(a.due)]] : [];
 
 export function billPdf(school: string, b: BillPdf) {
   return toBuffer((doc) => {
@@ -127,6 +137,7 @@ export function billPdf(school: string, b: BillPdf) {
       { title: 'Fine', width: 46, align: 'right' }, { title: 'Paid', width: 54, align: 'right' }, { title: 'Balance', width: 54, align: 'right' },
     ], [
       ...b.installments.map((i) => [i.label, i.dueDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit', timeZone: 'UTC' }), n(i.charges), n(i.fine), n(i.paid), n(i.due)]),
+      ...arrearRow(b.arrear, n),
       ['Total', '', n(b.totals.charges), n(b.totals.fine), n(b.totals.paid), n(b.totals.due)],
     ], true);
     doc.font('Helvetica-Bold').text(`Balance due: ${inr(b.totals.due)}`);
@@ -153,6 +164,7 @@ export function withdrawalPdf(school: string, w: WithdrawalPdf) {
       { title: 'Fine', width: 46, align: 'right' }, { title: 'Paid', width: 54, align: 'right' }, { title: 'Balance', width: 54, align: 'right' },
     ], [
       ...w.installments.map((i) => [i.label, i.dueDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit', timeZone: 'UTC' }), n(i.charges), n(i.fine), n(i.paid), n(i.due)]),
+      ...arrearRow(w.arrear, n),
       ['Total', '', n(w.totals.charges), n(w.totals.fine), n(w.totals.paid), n(w.totals.due)],
     ], true);
     doc.font('Helvetica-Bold').text(Number(w.totals.due) > 0 ? `Payable by family: ${inr(w.totals.due)}` : 'No dues payable.');

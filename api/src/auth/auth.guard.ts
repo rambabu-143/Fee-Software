@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   CanActivate,
   createParamDecorator,
   ExecutionContext,
@@ -59,5 +60,7 @@ export const CurrentUser = createParamDecorator(
 
 // A user tied to one school may only touch that school's data.
 export function assertSchool(user: AuthUser, schoolId: number) {
+  // 0 is falsy, so downstream `schoolId && {...}` filters would silently widen to every school.
+  if (!Number.isInteger(schoolId) || schoolId < 1) throw new BadRequestException('Invalid schoolId');
   if (user.schoolId && user.schoolId !== schoolId) throw new ForbiddenException();
 }

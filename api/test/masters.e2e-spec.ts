@@ -2,13 +2,15 @@ import 'dotenv/config';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
+import { listen } from './support.js';
 import { AppModule } from './../src/app.module.js';
 
 // Needs the seeded demo DB (npx prisma db seed). Restores anything it changes.
 describe('masters (e2e)', () => {
   let app: INestApplication;
   let auth: { Authorization: string };
-  const http = () => request(app.getHttpServer());
+  let base = '';
+  const http = () => request(base);
 
   beforeAll(async () => {
     const mod = await Test.createTestingModule({ imports: [AppModule] }).compile();
@@ -16,6 +18,7 @@ describe('masters (e2e)', () => {
     app.setGlobalPrefix('api');
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }));
     await app.init();
+    base = await listen(app);
     const login = await http()
       .post('/api/auth/login')
       .send({ username: 'admin', password: process.env.SEED_ADMIN_PASSWORD ?? 'admin123' });

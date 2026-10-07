@@ -3,6 +3,7 @@ import { Descriptions, Table, Typography } from 'antd'
 export type Bill = {
   student: { admissionNo: string; name: string; className: string }
   installments: { installmentId: number; label: string; dueDate: string; lines: { feeHeadId: number; name: string; amount: string }[]; charges: string; fine: string; fineDays: number; paid: string; due: string }[]
+  arrear?: { amount: string; paid: string; due: string; excess: string }
   totals: { charges: string; fine: string; paid: string; due: string }
 }
 
@@ -15,6 +16,12 @@ export function BillView({ bill }: { bill: Bill }) {
       <Descriptions size="small" column={1} style={{ marginBottom: 16 }} items={[
         { label: 'Student', children: `${bill.student.name} (${bill.student.admissionNo})` },
         { label: 'Class', children: bill.student.className },
+        // Previous-year balance: already folded into the totals below; negative amount = credit.
+        ...(bill.arrear && Number(bill.arrear.amount) !== 0
+          ? [{ label: 'Previous arrear', children: Number(bill.arrear.amount) > 0
+              ? `${inr(bill.arrear.amount)} · paid ${inr(bill.arrear.paid)} · due ${inr(bill.arrear.due)}`
+              : `Credit ${inr(String(-Number(bill.arrear.amount)))} (reduces the first installments)` }]
+          : []),
       ]} />
       <Table rowKey="installmentId" dataSource={bill.installments} pagination={false} size="small" scroll={{ x: true }}
         expandable={{

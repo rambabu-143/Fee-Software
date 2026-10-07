@@ -4,9 +4,11 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AppModule } from './../src/app.module.js';
 import { PrismaService } from './../src/prisma/prisma.service.js';
+import { dropSchool, listen, makeSchool } from './support.js';
 
 // Endpoint x role matrix: authentication, role authorization, cross-school isolation, then functional flows.
-// Run against a throwaway DB (DATABASE_URL=.../fees_e2e), seeded with `npx prisma db seed`.
+// Needs a seeded DB (admin user + 2026-27). Builds its own throwaway schools (MXA/MXB) and removes them afterwards,
+// so it is re-runnable and never touches DEMO1/DEMO2.
 type Ids = {
   schoolId: number; yearId: number; standardId: number; sectionId: number; section2Id: number;
   headId: number; optHeadId: number; instId: number; studentId: number; paymentId: number; facilityId: number; userId: number; slabId: number; stopId: number;
@@ -18,7 +20,8 @@ describe('authn/authz matrix + flows (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
   const hdr: Record<string, Record<string, string>> = {};
-  const http = () => request(app.getHttpServer());
+  let base = '';
+  const http = () => request(base);
   const call = (who: string, r: Req) => {
     const t = http()[r.m](`/api${r.p}`);
     if (hdr[who]) t.set(hdr[who]);
@@ -28,9 +31,17 @@ describe('authn/authz matrix + flows (e2e)', () => {
   const login = async (username: string, password: string) =>
     (await http().post('/api/auth/login').send({ username, password })).body.token as string;
 
-  let a: Ids; // school 1 (DEMO1) resources
-  let b: Ids; // school 2 (DEMO2) resources
+  let a: Ids; // school 1 (MXA) resources
+  let b: Ids; // school 2 (MXB) resources
   let nextYearId: number;
+
+  // Everything this spec creates: its schools (users, payments, facilities... go with them), the extra
+  // schools/years from the 'years + schools' test.
+  const YEAR_LABELS = ['2088-89', '2089-90'];
+  async function cleanup() {
+    for (const code of ['MXA', 'MXB', 'ZZTEST']) await dropSchool(prisma, code);
+    await prisma.academicYear.deleteMany({ where: { label: { in: YEAR_LABELS } } });
+  }
 
   async function discover(root: string, code: string): Promise<Ids> {
     const g = async (p: string) => (await call(root, { m: 'get', p })).body;
@@ -62,10 +73,14 @@ describe('authn/authz matrix + flows (e2e)', () => {
     app.setGlobalPrefix('api');
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }));
     await app.init();
+    base = await listen(app);
     prisma = app.get(PrismaService);
 
+    await cleanup(); // leftovers from a crashed run
+    await makeSchool(prisma, 'MXA');
+    await makeSchool(prisma, 'MXB');
     hdr.root = { Authorization: `Bearer ${await login('admin', process.env.SEED_ADMIN_PASSWORD ?? 'admin123')}` };
-    const [s1, s2] = await Promise.all(['DEMO1', 'DEMO2'].map((code) => prisma.school.findUniqueOrThrow({ where: { code } })));
+    const [s1, s2] = await Promise.all(['MXA', 'MXB'].map((code) => prisma.school.findUniqueOrThrow({ where: { code } })));
     for (const [tag, school] of [['1', s1], ['2', s2]] as const) {
       for (const role of ['ADMIN', 'ACCOUNTANT', 'VIEWER'] as const) {
         const r = await call('root', { m: 'post', p: '/users', b: { username: `m-${role.toLowerCase()}${tag}`, password: 'password1', role, schoolId: school.id } });
@@ -73,8 +88,8 @@ describe('authn/authz matrix + flows (e2e)', () => {
         hdr[`${role.toLowerCase()}${tag}`] = { Authorization: `Bearer ${await login(`m-${role.toLowerCase()}${tag}`, 'password1')}` };
       }
     }
-    a = await discover('root', 'DEMO1');
-    b = await discover('root', 'DEMO2');
+    a = await discover('root', 'MXA');
+    b = await discover('root', 'MXB');
     // A payment in each school so :id routes have something to hit.
     for (const x of [a, b]) {
       const who = x === a ? 'admin1' : 'admin2';
@@ -88,7 +103,10 @@ describe('authn/authz matrix + flows (e2e)', () => {
     b.userId = (await prisma.user.findUniqueOrThrow({ where: { username: 'm-viewer2' } })).id;
   });
 
-  afterAll(() => app.close());
+  afterAll(async () => {
+    await cleanup();
+    await app.close();
+  });
 
   // ---------- authentication ----------
   describe('authentication', () => {
@@ -257,7 +275,7 @@ describe('authn/authz matrix + flows (e2e)', () => {
 
     it('lists are scoped: school staff only see their own school and users', async () => {
       const s = await call('admin1', { m: 'get', p: '/schools' });
-      expect(s.body.map((x: { code: string }) => x.code)).toEqual(['DEMO1']);
+      expect(s.body.map((x: { code: string }) => x.code)).toEqual(['MXA']);
       const u = await call('admin1', { m: 'get', p: '/users' });
       expect(u.body.every((x: { schoolId: number }) => x.schoolId === a.schoolId)).toBe(true);
       expect((await call('root', { m: 'get', p: '/schools' })).body.length).toBeGreaterThanOrEqual(2);
@@ -896,13 +914,13 @@ describe('authn/authz matrix + flows (e2e)', () => {
     });
 
     it('years + schools (superadmin only): create, validation, duplicates, single current year', async () => {
-      const y = await call('root', { m: 'post', p: '/years', b: { label: '2027-28', startDate: '2027-04-01', endDate: '2028-03-31', isCurrent: false } });
+      const y = await call('root', { m: 'post', p: '/years', b: { label: '2088-89', startDate: '2088-04-01', endDate: '2089-03-31', isCurrent: false } });
       expect(y.status).toBe(201);
       nextYearId = y.body.id;
-      expect(await status('root', { m: 'post', p: '/years', b: { label: '2027-28', startDate: '2027-04-01', endDate: '2028-03-31' } })).toBe(409);
+      expect(await status('root', { m: 'post', p: '/years', b: { label: '2088-89', startDate: '2088-04-01', endDate: '2089-03-31' } })).toBe(409);
       expect(await status('root', { m: 'post', p: '/years', b: { label: '27-28', startDate: '2027-04-01', endDate: '2028-03-31' } })).toBe(400);
       expect.soft(await status('root', { m: 'post', p: '/years', b: { label: '2029-30', startDate: '2030-04-01', endDate: '2029-03-31' } }), 'end before start').toBe(400);
-      const c = await call('root', { m: 'post', p: '/years', b: { label: '2030-31', startDate: '2030-04-01', endDate: '2031-03-31', isCurrent: true } });
+      const c = await call('root', { m: 'post', p: '/years', b: { label: '2089-90', startDate: '2089-04-01', endDate: '2090-03-31', isCurrent: true } });
       expect(c.status).toBe(201);
       expect((await call('viewer1', { m: 'get', p: '/years' })).body.filter((x: { isCurrent: boolean }) => x.isCurrent)).toHaveLength(1);
       await prisma.academicYear.updateMany({ data: { isCurrent: false } });

@@ -8,12 +8,15 @@ import { BillView, type Bill } from '../bill'
 import { ConcessionsModal } from '../concessions'
 import { FacilitiesModal } from '../facilities'
 import { FinesModal } from '../fines'
+import { GuardiansModal } from '../guardians'
 import { WithdrawModal } from '../withdrawal'
 
 type Standard = { id: number; name: string; sections: { id: number; name: string }[] }
 type FeeHead = { id: number; name: string; type: string }
 type Student = {
   id: number; admissionNo: string; name: string; fatherName?: string; motherName?: string; phone?: string; email?: string; active: boolean
+  gender?: string; religion?: string; category?: string; nationality?: string; aadhaar?: string; penNo?: string; cbseRegNo?: string
+  address?: string; admissionDate?: string; fatherEmail?: string; motherEmail?: string; familyId?: number
   enrollment: { sectionId: number; standardId: number; className: string; rollNo?: number; isNewAdmission: boolean; optionalHeadIds: number[] }
 }
 export default function Students() {
@@ -25,6 +28,7 @@ export default function Students() {
   const [conc, setConc] = useState<Student | null>(null)
   const [fac, setFac] = useState<Student | null>(null)
   const [fine, setFine] = useState<Student | null>(null)
+  const [guard, setGuard] = useState<Student | null>(null)
   const [leaving, setLeaving] = useState<Student | null>(null)
   const [filter, setFilter] = useState<{ standardId?: number; q: string }>({ q: '' })
   const [editing, setEditing] = useState<Partial<Student> | null>(null)
@@ -56,7 +60,7 @@ export default function Students() {
 
   function open(s?: Student) {
     form.resetFields()
-    form.setFieldsValue(s ? { ...s, ...s.enrollment } : { isNewAdmission: true, optionalHeadIds: [] })
+    form.setFieldsValue(s ? { ...s, ...s.enrollment, admissionDate: s.admissionDate?.slice(0, 10) } : { isNewAdmission: true, optionalHeadIds: [] })
     setEditing(s ?? {})
   }
 
@@ -115,6 +119,7 @@ export default function Students() {
               <Button size="small" onClick={() => setConc(r)}>Concessions</Button>
               <Button size="small" onClick={() => setFine(r)}>Fines</Button>
               <Button size="small" onClick={() => setFac(r)}>Transport/Hostel</Button>
+              <Button size="small" onClick={() => setGuard(r)}>Guardians & subjects</Button>
               {r.active ? (
                 <Button size="small" danger onClick={() => setLeaving(r)}>Withdraw</Button>
               ) : (
@@ -142,6 +147,18 @@ export default function Students() {
           <Form.Item name="motherName" label="Mother's name"><Input /></Form.Item>
           <Form.Item name="phone" label="Phone"><Input type="tel" /></Form.Item>
           <Form.Item name="email" label="Email" rules={[{ type: 'email' }]}><Input type="email" /></Form.Item>
+          <Form.Item name="fatherEmail" label="Father's email" rules={[{ type: 'email' }]}><Input type="email" /></Form.Item>
+          <Form.Item name="motherEmail" label="Mother's email" rules={[{ type: 'email' }]}><Input type="email" /></Form.Item>
+          <Form.Item name="gender" label="Gender"><Select allowClear options={[{ value: 'M', label: 'Male' }, { value: 'F', label: 'Female' }, { value: 'OTHER', label: 'Other' }]} /></Form.Item>
+          <Form.Item name="religion" label="Religion"><Input /></Form.Item>
+          <Form.Item name="category" label="Category"><Input /></Form.Item>
+          <Form.Item name="nationality" label="Nationality"><Input placeholder="INDIAN" /></Form.Item>
+          <Form.Item name="aadhaar" label="Aadhaar no."><Input /></Form.Item>
+          <Form.Item name="penNo" label="PEN no."><Input /></Form.Item>
+          <Form.Item name="cbseRegNo" label="CBSE registration no."><Input /></Form.Item>
+          <Form.Item name="admissionDate" label="Admission date"><Input type="date" /></Form.Item>
+          <Form.Item name="address" label="Address"><Input.TextArea rows={2} /></Form.Item>
+          <Form.Item name="familyId" label="Family id (same id = siblings)"><InputNumber min={1} style={{ width: '100%' }} /></Form.Item>
           <Form.Item name="isNewAdmission" valuePropName="checked">
             <Checkbox>New admission (charged admission & refundable fees)</Checkbox>
           </Form.Item>
@@ -165,6 +182,7 @@ export default function Students() {
       <ConcessionsModal student={conc} yearId={yearId} heads={heads} onClose={() => setConc(null)} />
       <WithdrawModal student={leaving} yearId={yearId} onClose={() => setLeaving(null)} onDone={() => { setLeaving(null); load().catch((e) => message.error(e.message)) }} />
       <FinesModal student={fine} schoolId={schoolId} yearId={yearId} onClose={() => setFine(null)} />
+      <GuardiansModal student={guard} schoolId={schoolId} yearId={yearId} onClose={() => setGuard(null)} />
       <FacilitiesModal student={fac} schoolId={schoolId} yearId={yearId} onClose={() => setFac(null)} />
     </>
   )

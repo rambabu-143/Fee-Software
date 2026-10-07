@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
+import { listen } from './support.js';
 import { AppModule } from './../src/app.module.js';
 import { PrismaService } from './../src/prisma/prisma.service.js';
 
@@ -10,7 +11,8 @@ describe('bulk promotion (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
   let auth: { Authorization: string };
-  const http = () => request(app.getHttpServer());
+  let base = '';
+  const http = () => request(base);
   const yearLabel = `2099-${String(Date.now() % 100).padStart(2, '0')}`;
   const admissionPrefix = `E2E-PROMO-${Date.now()}`;
 
@@ -20,6 +22,7 @@ describe('bulk promotion (e2e)', () => {
     app.setGlobalPrefix('api');
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }));
     await app.init();
+    base = await listen(app);
     prisma = app.get(PrismaService);
     const login = await http()
       .post('/api/auth/login')

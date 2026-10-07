@@ -33,3 +33,57 @@ export async function openPdf(path: string) {
   if (!res.ok) throw new Error((await res.json().catch(() => null))?.message ?? res.statusText)
   window.open(URL.createObjectURL(await res.blob()))
 }
+
+// Authenticated blob fetch (GET or POST). Returns the response headers so callers can read e.g. X-Serial-No.
+async function fetchBlob(path: string, init: RequestInit = {}) {
+  const res = await fetch(`/api${path}`, {
+    ...init,
+    headers: { ...(init.body ? { 'Content-Type': 'application/json' } : {}), Authorization: `Bearer ${auth.token}` },
+  })
+  if (!res.ok) {
+    const m = (await res.json().catch(() => null))?.message
+    throw new Error(Array.isArray(m) ? m.join(', ') : (m ?? res.statusText))
+  }
+  return { blob: await res.blob(), headers: res.headers }
+}
+
+// ponytail: window.open after an await can be blocked by popup blockers; reprint from the list if so.
+export async function openBlob(path: string, init: RequestInit = {}) {
+  const { blob, headers } = await fetchBlob(path, init)
+  window.open(URL.createObjectURL(blob))
+  return headers
+}
+
+export async function saveBlob(path: string, filename: string) {
+  const { blob } = await fetchBlob(path)
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(a.href)
+}
+
+// Authenticated file download (CSV etc.): fetch as a blob, then click a temporary link.
+export async function downloadFile(path: string, name: string) {
+  const res = await fetch(`/api${path}`, { headers: { Authorization: `Bearer ${auth.token}` } })
+  if (!res.ok) throw new Error((await res.json().catch(() => null))?.message ?? res.statusText)
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(await res.blob())
+  a.download = name
+  a.click()
+}
+
+// POST that returns a PDF (e.g. defaulter letters): open it, and hand back the X-Letters / X-Skipped counts.
+export async function postPdf(path: string, body: unknown) {
+  const res = await fetch(`/api${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth.token}` },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const b = await res.json().catch(() => null)
+    throw new Error(Array.isArray(b?.message) ? b.message.join(', ') : (b?.message ?? res.statusText))
+  }
+  window.open(URL.createObjectURL(await res.blob()))
+  return { letters: Number(res.headers.get('X-Letters')), skipped: Number(res.headers.get('X-Skipped')) }
+}

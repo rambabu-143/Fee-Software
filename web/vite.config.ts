@@ -3,5 +3,5 @@ import { defineConfig } from 'vite'
 
 export default defineConfig({
   plugins: [react()],
-  server: { proxy: { '/api': 'http://localhost:3100' } },
+  server: { proxy: { '/api': process.env.API_URL ?? 'http://localhost:3100' } },
 })

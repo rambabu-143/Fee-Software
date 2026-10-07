@@ -10,6 +10,8 @@ class ConcessionDto {
   // Off each installment of the head.
   @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) amount?: number;
   @IsString() @MinLength(2) reason: string;
+  // Report bucket (Staff, Economic, EDC...); the concession reports group by it.
+  @IsOptional() @IsString() @MinLength(1) category?: string;
 }
 
 class SaveConcessionsDto {
@@ -34,7 +36,7 @@ export class ConcessionsController {
   async list(@CurrentUser() u: AuthUser, @Param('id', ParseIntPipe) id: number, @Query('yearId', ParseIntPipe) yearId: number) {
     const e = await this.enrollment(u, id, yearId);
     const rows = await this.prisma.concession.findMany({ where: { enrollmentId: e.id }, orderBy: { id: 'asc' } });
-    return rows.map((c) => ({ feeHeadId: c.feeHeadId, percent: c.percent?.toFixed(2) ?? null, amount: c.amount?.toFixed(2) ?? null, reason: c.reason }));
+    return rows.map((c) => ({ feeHeadId: c.feeHeadId, percent: c.percent?.toFixed(2) ?? null, amount: c.amount?.toFixed(2) ?? null, reason: c.reason, category: c.category }));
   }
 
   // Replaces the student's whole concession list for the year.
@@ -53,7 +55,7 @@ export class ConcessionsController {
     await this.prisma.$transaction([
       this.prisma.concession.deleteMany({ where: { enrollmentId: e.id } }),
       this.prisma.concession.createMany({
-        data: dto.items.map((i) => ({ enrollmentId: e.id, feeHeadId: i.feeHeadId, percent: i.percent ?? null, amount: i.amount ?? null, reason: i.reason })),
+        data: dto.items.map((i) => ({ enrollmentId: e.id, feeHeadId: i.feeHeadId, percent: i.percent ?? null, amount: i.amount ?? null, reason: i.reason, category: i.category ?? null })),
       }),
     ]);
     return this.list(u, id, dto.yearId);

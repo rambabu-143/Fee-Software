@@ -2,7 +2,8 @@
 
 export type HeadType = 'ADMISSION' | 'ANNUAL' | 'MONTHLY' | 'REFUNDABLE' | 'OPTIONAL';
 
-export type BillPayment = { installmentId: number; date: Date; charges: number; fine: number };
+// installmentId null = the receipt's previous-year arrear portion.
+export type BillPayment = { installmentId: number | null; date: Date; charges: number; fine: number; arrear?: number };
 
 export type BillInput = {
   installments: { id: number; number: number; label: string; dueDate: Date; fineStartDate: Date | null; finePerDay: number }[];
@@ -19,6 +20,9 @@ export type BillInput = {
   withdrawnOn: Date | null;
   fineOverrides: { installmentId: number; amount: number }[];
   facilityLines: { facilityId: number; name: string; installmentId: number; amount: number }[];
+  // Previous-year closing balance in paise, net of any waiver. Positive = owed (allocated first, no fine);
+  // negative = credit, spread over the earliest installments' charges.
+  arrear?: number;
   asOf: Date;
 };
 
@@ -40,7 +44,7 @@ export type InstallmentBill = {
   paid: number;
   due: number;
 };
-export type Allocation = { installmentId: number; charges: number; fine: number };
+export type Allocation = { installmentId: number | null; charges: number; fine: number; arrear?: number };
 
 const DAY = 86_400_000;
 const utcDay = (d: Date) => Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
@@ -63,7 +67,9 @@ function applies(type: HeadType, feeHeadId: number, input: BillInput) {
 export function calculateBill(input: BillInput) {
   const today = utcDay(input.asOf);
 
-  const installments: InstallmentBill[] = [...input.installments]
+  // Previous-year credit eats the earliest installments' charges first; any left over is owed back.
+  let creditLeft = Math.max(0, -(input.arrear ?? 0));
+  const staged = [...input.installments]
     .sort((a, b) => a.number - b.number)
     .map((inst) => {
       const dropped = input.withdrawnOn !== null && utcDay(inst.dueDate) > utcDay(input.withdrawnOn);
@@ -80,6 +86,15 @@ export function calculateBill(input: BillInput) {
             .filter((f) => f.installmentId === inst.id)
             .map((f) => ({ feeHeadId: -f.facilityId, name: f.name, amount: f.amount })),
         );
+      const gross = lines.reduce((sum, l) => sum + l.amount, 0);
+      const take = Math.min(creditLeft, Math.max(0, gross));
+      creditLeft -= take;
+      if (take) lines.push({ feeHeadId: 0, name: 'Less: previous year credit', amount: -take });
+      return { inst, lines };
+    });
+
+  const installments: InstallmentBill[] = staged
+    .map(({ inst, lines }) => {
       const charges = lines.reduce((sum, l) => sum + l.amount, 0);
 
       const pays = input.payments
@@ -127,17 +142,35 @@ export function calculateBill(input: BillInput) {
       };
     });
 
+  const owed = Math.max(0, input.arrear ?? 0);
+  const arrearPaid = input.payments.filter((p) => utcDay(p.date) <= today).reduce((s, p) => s + (p.arrear ?? 0), 0);
+  const arrear = {
+    amount: owed,
+    paid: arrearPaid,
+    due: Math.max(0, owed - arrearPaid),
+    excess: creditLeft + Math.max(0, arrearPaid - owed),
+  };
   const total = (k: 'charges' | 'fine' | 'paid' | 'due') => installments.reduce((s, i) => s + i[k], 0);
   return {
     installments,
-    totals: { charges: total('charges'), fine: total('fine'), paid: total('paid'), due: total('due') },
+    arrear,
+    // Arrear folds into the totals so charges + fine - paid = due still holds.
+    totals: {
+      charges: total('charges') + arrear.amount, fine: total('fine'),
+      paid: total('paid') + arrear.paid, due: total('due') + arrear.due,
+    },
   };
 }
 
-// Oldest installment first; within one, fine before charges.
-export function allocate(installments: InstallmentBill[], amount: number): Allocation[] {
+// Arrear first, then oldest installment first; within one, fine before charges.
+export function allocate(installments: InstallmentBill[], amount: number, arrearDue = 0): Allocation[] {
   let left = amount;
   const out: Allocation[] = [];
+  const arrear = Math.min(left, arrearDue);
+  if (arrear > 0) {
+    left -= arrear;
+    out.push({ installmentId: null, charges: 0, fine: 0, arrear });
+  }
   for (const i of [...installments].sort((a, b) => a.number - b.number)) {
     const fine = Math.min(left, i.fineDue);
     const charges = Math.min(left - fine, i.chargesDue);

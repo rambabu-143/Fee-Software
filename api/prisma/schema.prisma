@@ -9,16 +9,25 @@ datasource db {
 
 // A school or branch. Everything else hangs off this.
 model School {
-  id           Int           @id @default(autoincrement())
-  code         String        @unique
-  name         String
-  standards    Standard[]
-  feeHeads     FeeHead[]
-  installments Installment[]
-  students     Student[]
-  users        User[]
-  payments     Payment[]
-  facilities   Facility[]
+  id            Int              @id @default(autoincrement())
+  code          String           @unique
+  name          String
+  standards     Standard[]
+  feeHeads      FeeHead[]
+  installments  Installment[]
+  students      Student[]
+  users         User[]
+  payments      Payment[]
+  facilities    Facility[]
+  affiliationNo String?
+  schoolNo      String?
+  address       String?
+  kind          SchoolKind       @default(SENIOR)
+  occupations   Occupation[]
+  subjects      Subject[]
+  documents     IssuedDocument[]
+  banks         Bank[]
+  vouchers      Voucher[]
 }
 
 // "2026-27". Fee rules are rows keyed by year, not a new source file per year.
@@ -33,6 +42,10 @@ model AcademicYear {
   enrollments        Enrollment[]
   payments           Payment[]
   facilityStructures FacilityFeeStructure[]
+  documents          IssuedDocument[]
+  vouchers           Voucher[]
+  deposits           Deposit[]
+  arrearsFrom        ArrearCarry[]
 }
 
 model Standard {
@@ -48,29 +61,46 @@ model Standard {
 }
 
 model Section {
-  id          Int          @id @default(autoincrement())
-  standardId  Int
-  standard    Standard     @relation(fields: [standardId], references: [id])
-  name        String
-  enrollments Enrollment[]
+  id           Int          @id @default(autoincrement())
+  standardId   Int
+  standard     Standard     @relation(fields: [standardId], references: [id])
+  name         String
+  enrollments  Enrollment[]
+  classTeacher String?
 
   @@unique([standardId, name])
 }
 
 model Student {
-  id          Int          @id @default(autoincrement())
-  schoolId    Int
-  school      School       @relation(fields: [schoolId], references: [id])
-  admissionNo String
-  name        String
-  dob         DateTime?    @db.Date
-  fatherName  String?
-  motherName  String?
-  phone       String?
-  email       String?
-  active      Boolean      @default(true)
-  enrollments Enrollment[]
-  payments    Payment[]
+  id            Int              @id @default(autoincrement())
+  schoolId      Int
+  school        School           @relation(fields: [schoolId], references: [id])
+  admissionNo   String
+  name          String
+  dob           DateTime?        @db.Date
+  fatherName    String?
+  motherName    String?
+  phone         String?
+  email         String?
+  active        Boolean          @default(true)
+  enrollments   Enrollment[]
+  payments      Payment[]
+  gender        Gender?
+  religion      String?
+  category      String?
+  nationality   String?          @default("INDIAN")
+  aadhaar       String?
+  penNo         String?
+  cbseRegNo     String?
+  address       String?
+  admissionDate DateTime?        @db.Date
+  fatherEmail   String?
+  motherEmail   String?
+  // Manual sibling link: students sharing a familyId are siblings.
+  familyId      Int?
+  guardians     Guardian[]
+  documents     IssuedDocument[]
+  deposits      Deposit[]
 
   @@unique([schoolId, admissionNo])
 }
@@ -94,6 +124,10 @@ model Enrollment {
   facilityAssignments FacilityAssignment[]
   withdrawal          Withdrawal?
   transport           TransportAssignment?
+  subjects            StudentSubject[]
+  vouchers            Voucher[]
+  arrearCarry         ArrearCarry?
+  transportRenewal    TransportRenewal?
 
   @@unique([studentId, yearId])
 }
@@ -202,6 +236,16 @@ model Payment {
   cancelledBy  String?
   cancelReason String?
   allocations  PaymentAllocation[]
+  // Banking: cheques/online receipts are PENDING until the bank credits them. CASH is CLEARED.
+  bankId       Int?
+  bank         Bank?               @relation(fields: [bankId], references: [id])
+  chequeNo     String?
+  chequeDate   DateTime?           @db.Date
+  bankDate     DateTime?           @db.Date
+  clearStatus  ClearStatus         @default(CLEARED)
+  bouncedAt    DateTime?
+  bounceCharge Decimal?            @db.Decimal(12, 2)
+  deposits     Deposit[]
 
   @@unique([schoolId, yearId, receiptNo])
   @@index([studentId, yearId])
@@ -209,13 +253,15 @@ model Payment {
 
 // How a receipt's amount was split across installments.
 model PaymentAllocation {
-  id            Int         @id @default(autoincrement())
+  id            Int          @id @default(autoincrement())
   paymentId     Int
-  payment       Payment     @relation(fields: [paymentId], references: [id])
-  installmentId Int
-  installment   Installment @relation(fields: [installmentId], references: [id])
-  charges       Decimal     @db.Decimal(12, 2)
-  fine          Decimal     @db.Decimal(12, 2)
+  payment       Payment      @relation(fields: [paymentId], references: [id])
+  // null installment = the previous-year arrear line.
+  installmentId Int?
+  installment   Installment? @relation(fields: [installmentId], references: [id])
+  charges       Decimal      @db.Decimal(12, 2)
+  fine          Decimal      @db.Decimal(12, 2)
+  arrear        Decimal      @default(0) @db.Decimal(12, 2)
 }
 
 model ReceiptCounter {
@@ -237,23 +283,24 @@ model Concession {
   percent      Decimal?   @db.Decimal(5, 2)
   amount       Decimal?   @db.Decimal(12, 2)
   reason       String
+  category     String?
 
   @@unique([enrollmentId, feeHeadId])
 }
 
 // A bus stop on a route (a TRANSPORT facility), priced by its slab (a SLAB facility).
 model Stop {
-  id         Int                    @id @default(autoincrement())
+  id         Int                   @id @default(autoincrement())
   routeId    Int
-  route      Facility               @relation("RouteStops", fields: [routeId], references: [id])
+  route      Facility              @relation("RouteStops", fields: [routeId], references: [id])
   slabId     Int
-  slab       Facility               @relation("SlabStops", fields: [slabId], references: [id])
+  slab       Facility              @relation("SlabStops", fields: [slabId], references: [id])
   name       String
   sequence   Int
   pickupTime String?
   dropTime   String?
-  pickups    TransportAssignment[]  @relation("Pickup")
-  drops      TransportAssignment[]  @relation("Drop")
+  pickups    TransportAssignment[] @relation("Pickup")
+  drops      TransportAssignment[] @relation("Drop")
 
   @@unique([routeId, sequence])
   @@unique([routeId, name])
@@ -348,4 +395,327 @@ model FacilityAssignment {
   facility     Facility   @relation(fields: [facilityId], references: [id])
 
   @@unique([enrollmentId, facilityId])
+}
+
+// ---------------------------------------------------------------- legacy parity additions
+
+enum Gender {
+  M
+  F
+  OTHER
+}
+
+enum SchoolKind {
+  SENIOR
+  JUNIOR
+}
+
+enum SendStatus {
+  QUEUED
+  SENT
+  FAILED
+}
+
+enum ClearStatus {
+  PENDING
+  CLEARED
+  BOUNCED
+}
+
+enum DocType {
+  TC
+  ADMISSION_CERT
+}
+
+enum SubjectKind {
+  LANGUAGE
+  ADDITIONAL
+  CORE
+}
+
+enum VoucherKind {
+  CAUTION_REFUND
+  ADVANCE_REFUND
+  EXCESS_REFUND
+  OTHER
+}
+
+enum DepositKind {
+  ADVANCE
+  CAUTION
+  TRANSPORT
+}
+
+enum DepositStatus {
+  HELD
+  REFUNDED
+  ADJUSTED
+  FORFEITED
+}
+
+// Parent/guardian rows. isStaff marks a parent employed by the school (staff-ward report).
+model Guardian {
+  id            Int         @id @default(autoincrement())
+  studentId     Int
+  student       Student     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  name          String
+  relation      String // FATHER | MOTHER | GUARDIAN
+  mobile        String?
+  email         String?
+  designation   String?
+  organization  String?
+  officeAddress String?
+  officePhone   String?
+  occupationId  Int?
+  occupation    Occupation? @relation(fields: [occupationId], references: [id])
+  isStaff       Boolean     @default(false)
+  staffBranch   String?
+
+  @@index([studentId])
+}
+
+model Occupation {
+  id        Int          @id @default(autoincrement())
+  schoolId  Int
+  school    School       @relation(fields: [schoolId], references: [id])
+  name      String
+  parentId  Int?
+  parent    Occupation?  @relation("OccSub", fields: [parentId], references: [id])
+  children  Occupation[] @relation("OccSub")
+  guardians Guardian[]
+
+  @@unique([schoolId, name])
+}
+
+model Subject {
+  id       Int              @id @default(autoincrement())
+  schoolId Int
+  school   School           @relation(fields: [schoolId], references: [id])
+  name     String
+  kind     SubjectKind
+  students StudentSubject[]
+
+  @@unique([schoolId, name])
+}
+
+model StudentSubject {
+  enrollmentId Int
+  enrollment   Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  subjectId    Int
+  subject      Subject    @relation(fields: [subjectId], references: [id])
+
+  @@id([enrollmentId, subjectId])
+}
+
+// TC / admission certificate. Re-issue supersedes the old row; nothing is deleted.
+model IssuedDocument {
+  id           Int          @id @default(autoincrement())
+  schoolId     Int
+  school       School       @relation(fields: [schoolId], references: [id])
+  studentId    Int
+  student      Student      @relation(fields: [studentId], references: [id])
+  yearId       Int
+  year         AcademicYear @relation(fields: [yearId], references: [id])
+  type         DocType
+  serialNo     Int
+  issuedOn     DateTime     @db.Date
+  issuedBy     String
+  supersededAt DateTime?
+  payload      Json
+
+  @@unique([schoolId, type, yearId, serialNo])
+}
+
+model DefaulterLetterTemplate {
+  id       Int    @id @default(autoincrement())
+  schoolId Int
+  name     String
+  body     String // placeholders: {parent} {student} {admissionNo} {class} {due} {since} {date}
+
+  @@unique([schoolId, name])
+}
+
+// Log of letters printed / reminders sent. schoolId is scoped by the controller.
+model DefaulterNotice {
+  id           Int      @id @default(autoincrement())
+  schoolId     Int
+  enrollmentId Int
+  kind         String // LETTER | SMS
+  scope        String   @default("FEE")
+  dueAmount    Decimal  @db.Decimal(12, 2)
+  asOf         DateTime @db.Date
+  createdBy    String
+  createdAt    DateTime @default(now())
+
+  @@index([schoolId, enrollmentId])
+}
+
+model Bank {
+  id        Int       @id @default(autoincrement())
+  schoolId  Int
+  school    School    @relation(fields: [schoolId], references: [id])
+  name      String
+  accountNo String?
+  ifsc      String?
+  active    Boolean   @default(true)
+  payments  Payment[]
+
+  @@unique([schoolId, name])
+}
+
+// Money paid OUT to a family (refunds). Separate from Payment so collection totals are untouched.
+model Voucher {
+  id           Int          @id @default(autoincrement())
+  schoolId     Int
+  school       School       @relation(fields: [schoolId], references: [id])
+  yearId       Int
+  year         AcademicYear @relation(fields: [yearId], references: [id])
+  enrollmentId Int
+  enrollment   Enrollment   @relation(fields: [enrollmentId], references: [id])
+  voucherNo    Int
+  date         DateTime     @db.Date
+  kind         VoucherKind
+  amount       Decimal      @db.Decimal(12, 2)
+  mode         PaymentMode
+  reference    String?
+  remarks      String?
+  createdBy    String
+  createdAt    DateTime     @default(now())
+  cancelledAt  DateTime?
+  cancelReason String?
+
+  @@unique([schoolId, yearId, voucherNo])
+}
+
+model VoucherCounter {
+  schoolId Int
+  yearId   Int
+  last     Int
+
+  @@id([schoolId, yearId])
+}
+
+// Refundable deposit held for a student across years (advance, caution, transport security).
+model Deposit {
+  id             Int           @id @default(autoincrement())
+  studentId      Int
+  student        Student       @relation(fields: [studentId], references: [id])
+  kind           DepositKind
+  amount         Decimal       @db.Decimal(12, 2)
+  receivedYearId Int
+  receivedYear   AcademicYear  @relation(fields: [receivedYearId], references: [id])
+  paymentId      Int?
+  payment        Payment?      @relation(fields: [paymentId], references: [id])
+  status         DepositStatus @default(HELD)
+  refundedAt     DateTime?     @db.Date
+  refundAmount   Decimal?      @db.Decimal(12, 2)
+  deduction      Decimal?      @db.Decimal(12, 2)
+  refundMode     PaymentMode?
+  refundRef      String?
+  remarks        String?
+  createdBy      String
+  createdAt      DateTime      @default(now())
+
+  @@unique([studentId, kind])
+}
+
+// Opening balance of a year's enrollment = previous year's closing balance (negative = credit).
+model ArrearCarry {
+  id           Int          @id @default(autoincrement())
+  enrollmentId Int          @unique
+  enrollment   Enrollment   @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  fromYearId   Int
+  fromYear     AcademicYear @relation(fields: [fromYearId], references: [id])
+  amount       Decimal      @db.Decimal(12, 2)
+  source       String // COMPUTED | IMPORT | MANUAL
+  waivedAmount Decimal      @default(0) @db.Decimal(12, 2)
+  waiveReason  String?
+  createdBy    String
+  createdAt    DateTime     @default(now())
+}
+
+model TransportRenewal {
+  id           Int        @id @default(autoincrement())
+  enrollmentId Int        @unique
+  enrollment   Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  type         String // RENEW | WITHDRAW
+  status       String     @default("PENDING") // PENDING | APPLIED | SKIPPED
+  note         String?
+  filledBy     String
+  createdAt    DateTime   @default(now())
+  appliedAt    DateTime?
+}
+
+model SmsTemplate {
+  id       Int     @id @default(autoincrement())
+  schoolId Int
+  forType  String // defaulter | receipt | general
+  starting String  @default("")
+  content  String
+  ending   String  @default("")
+  active   Boolean @default(true)
+
+  @@index([schoolId, forType])
+}
+
+model SmsLog {
+  id               Int        @id @default(autoincrement())
+  schoolId         Int
+  enrollmentId     Int?
+  number           String
+  type             String
+  body             String
+  status           SendStatus
+  providerResponse String?
+  createdAt        DateTime   @default(now())
+
+  @@index([schoolId, createdAt])
+}
+
+model EmailTemplate {
+  id       Int     @id @default(autoincrement())
+  schoolId Int
+  name     String
+  subject  String
+  body     String
+  active   Boolean @default(true)
+
+  @@index([schoolId])
+}
+
+model EmailLog {
+  id               Int        @id @default(autoincrement())
+  schoolId         Int
+  enrollmentId     Int?
+  address          String
+  subject          String
+  status           SendStatus
+  providerResponse String?
+  createdAt        DateTime   @default(now())
+
+  @@index([schoolId, createdAt])
+}
+
+// Immutable change history. Never store password hashes in before/after.
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  schoolId  Int?
+  username  String
+  entity    String
+  entityId  Int?
+  action    String // CREATE | UPDATE | DELETE | CANCEL
+  before    Json?
+  after     Json?
+  createdAt DateTime @default(now())
+
+  @@index([schoolId, entity, createdAt])
+}
+
+// Whitelisted per-school key/value settings.
+model Setting {
+  schoolId Int
+  key      String
+  value    Json
+
+  @@id([schoolId, key])
 }
