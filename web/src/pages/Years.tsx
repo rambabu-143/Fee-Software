@@ -1,6 +1,7 @@
 import { Button, Checkbox, Form, Input, Modal, Table, Tag, message } from 'antd'
 import { useState } from 'react'
 import { api } from '../api'
+import { Gate } from '../session'
 import { useSelection, type Year } from '../selection'
 
 export default function Years() {
@@ -21,9 +22,9 @@ export default function Years() {
 
   return (
     <>
-      <Button type="primary" onClick={() => setOpen(true)} style={{ marginBottom: 16 }}>
+      <Gate cap="years.create"><Button type="primary" onClick={() => setOpen(true)} style={{ marginBottom: 16 }}>
         Add academic year
-      </Button>
+      </Button></Gate>
       <Table rowKey="id" dataSource={years} pagination={false} scroll={{ x: true }} columns={[
         { title: 'Year', dataIndex: 'label', render: (v, r) => <>{v} {r.isCurrent && <Tag color="green">Current</Tag>}</> },
         { title: 'Start', dataIndex: 'startDate', render: (v: string) => v.slice(0, 10) },

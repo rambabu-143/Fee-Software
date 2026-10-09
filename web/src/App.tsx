@@ -1,6 +1,9 @@
-import { Button, Layout, Menu, Select, Space } from 'antd'
+import { Button, Layout, Menu, Result, Select, Space, Tag } from 'antd'
+import type { ReactNode } from 'react'
 import { BrowserRouter, Link, Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 import { auth } from './api'
+import { can, PAGE_CAP } from './permissions'
+import { SessionProvider, useSession } from './session'
 import { SelectionProvider, useSelection } from './selection'
 import Login from './pages/Login'
 import Schools from './pages/Schools'
@@ -75,21 +78,36 @@ function Pickers() {
   )
 }
 
+// Pages the role can open at all; the rest are hidden from the menu and blocked by URL too.
+const allowed = (role: string | undefined, path: string) => !PAGE_CAP[path] || can(role as never, PAGE_CAP[path]!)
+
+function Guard({ path, children }: { path: string; children: ReactNode }) {
+  const role = useSession()?.role
+  if (allowed(role, path)) return <>{children}</>
+  return <Result status="403" title="Not allowed" subTitle={`Your role (${role}) cannot use this page.`}
+    extra={<Link to="/students">Back to Students</Link>} />
+}
+
 function Shell() {
   const { pathname } = useLocation()
-  if (!auth.token) return <Navigate to="/login" replace />
+  const session = useSession()
+  // Missing, malformed or expired token: same as logged out.
+  if (!auth.token || !session) { auth.set(null); return <Navigate to="/login" replace /> }
   return (
     <SelectionProvider>
       <Layout style={{ minHeight: '100vh' }}>
         <Layout.Sider breakpoint="md" collapsedWidth={0}>
           <div style={{ color: '#fff', padding: 16, fontWeight: 600 }}>Fees</div>
           <Menu theme="dark" selectedKeys={[pathname]}
-            items={pages.map(([path, label]) => ({ key: path, label: <Link to={path}>{label}</Link> }))} />
+            items={pages.filter(([path]) => allowed(session.role, path)).map(([path, label]) => ({ key: path, label: <Link to={path}>{label}</Link> }))} />
         </Layout.Sider>
         <Layout>
           <Layout.Header style={{ background: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '0 16px', height: 'auto', minHeight: 64, flexWrap: 'wrap' }}>
             <Pickers />
-            <Button onClick={() => { auth.set(null); location.href = '/login' }}>Logout</Button>
+            <Space>
+              <span>{session.username} <Tag>{session.role}</Tag></span>
+              <Button onClick={() => { auth.set(null); location.href = '/login' }}>Logout</Button>
+            </Space>
           </Layout.Header>
           <Layout.Content style={{ padding: 16 }}>
             <Outlet />
@@ -105,8 +123,8 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
-        <Route element={<Shell />}>
-          {pages.map(([path, , Page]) => <Route key={path} path={path} element={<Page />} />)}
+        <Route element={<SessionProvider><Shell /></SessionProvider>}>
+          {pages.map(([path, , Page]) => <Route key={path} path={path} element={<Guard path={path}><Page /></Guard>} />)}
           <Route path="*" element={<Navigate to="/students" replace />} />
         </Route>
       </Routes>

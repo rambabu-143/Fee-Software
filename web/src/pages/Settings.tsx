@@ -1,6 +1,7 @@
 import { Alert, Button, Input, Switch, Table, Typography, message } from 'antd'
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import { useCan } from '../session'
 import { useSelection } from '../selection'
 
 type Values = { receiptFooter: string; smsEnabled: boolean; lateFeeEnabled: boolean }
@@ -14,6 +15,7 @@ const ROWS: { key: keyof Values; label: string; live: boolean }[] = [
 
 // ponytail: the UI does not know the user's role; the API returns 403 for non-admins and we show it.
 export default function Settings() {
+  const canWrite = useCan()('settings.write')
   const { schoolId } = useSelection()
   const [vals, setVals] = useState<Values>()
   const [footer, setFooter] = useState('')
@@ -43,8 +45,8 @@ export default function Settings() {
         { title: 'Setting', dataIndex: 'label' },
         { title: 'Applied', dataIndex: 'live', render: (v) => (v ? 'yes' : <Typography.Text type="secondary">not applied yet</Typography.Text>) },
         { title: 'Value', render: (_, r) => r.key === 'receiptFooter'
-          ? <Input.Search value={footer} maxLength={200} onChange={(e) => setFooter(e.target.value)} enterButton="Save" onSearch={(v) => save('receiptFooter', v)} />
-          : <Switch checked={vals?.[r.key] as boolean} onChange={(v) => save(r.key, v)} /> },
+          ? <Input.Search disabled={!canWrite} value={footer} maxLength={200} onChange={(e) => setFooter(e.target.value)} enterButton="Save" onSearch={(v) => save('receiptFooter', v)} />
+          : <Switch disabled={!canWrite} checked={vals?.[r.key] as boolean} onChange={(v) => save(r.key, v)} /> },
       ]} />
       <Button style={{ marginTop: 12 }} onClick={load}>Reload</Button>
     </>

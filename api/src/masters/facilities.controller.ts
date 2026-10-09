@@ -18,16 +18,16 @@ class RenameDto {
   @IsString() @MinLength(1) name: string;
 }
 
-class ItemDto {
+class FacilityItemDto {
   @IsInt() facilityId: number;
   @IsInt() installmentId: number;
   @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) amount: number;
 }
-class SaveStructureDto {
+class SaveFacilityStructureDto {
   @IsInt() yearId: number;
   @IsInt() schoolId: number;
   @IsEnum(FacilityKind) kind: FacilityKind;
-  @IsArray() @ValidateNested({ each: true }) @Type(() => ItemDto) items: ItemDto[];
+  @IsArray() @ValidateNested({ each: true }) @Type(() => FacilityItemDto) items: FacilityItemDto[];
 }
 
 // Transport routes and hostel rooms: same shape (a name + a fee-per-installment grid),
@@ -80,7 +80,7 @@ export class FacilitiesController {
 
   @Roles('ADMIN', 'ACCOUNTANT')
   @Put('structure')
-  async saveStructure(@CurrentUser() u: AuthUser, @Body() dto: SaveStructureDto) {
+  async saveStructure(@CurrentUser() u: AuthUser, @Body() dto: SaveFacilityStructureDto) {
     const { yearId, schoolId, kind, items } = dto;
     assertSchool(u, schoolId);
 

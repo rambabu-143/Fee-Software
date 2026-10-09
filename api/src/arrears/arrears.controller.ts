@@ -1,5 +1,5 @@
 import { BadRequestException, Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Query } from '@nestjs/common';
-import { IsInt, IsNumber, IsOptional, IsString, Min, MinLength } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsInt, IsNumber, IsOptional, IsString, Min, MinLength } from 'class-validator';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { assertSchool, CurrentUser, Roles, type AuthUser } from '../auth/auth.guard.js';
 import { BillingService, netArrear } from '../billing/billing.service.js';
@@ -9,6 +9,10 @@ class CarryDto {
   @IsInt() schoolId: number;
   @IsInt() fromYearId: number;
   @IsInt() toYearId: number;
+  // Preview: same evaluation, nothing written.
+  @IsOptional() @IsBoolean() dryRun?: boolean;
+  // Only these students (e.g. after fixing one left-behind case).
+  @IsOptional() @IsArray() @ArrayMaxSize(5000) @IsInt({ each: true }) studentIds?: number[];
 }
 
 class UpdateArrearDto {
@@ -17,6 +21,8 @@ class UpdateArrearDto {
   @IsString() @MinLength(3) reason: string;
   @IsOptional() @IsInt() fromYearId?: number;
 }
+
+type Outcome = 'CARRIED' | 'SKIPPED_EXISTING' | 'SKIPPED_WITHDRAWN' | 'SKIPPED_NOT_ENROLLED_NEXT_YEAR' | 'SKIPPED_ZERO';
 
 const today = () => new Date(new Date().toISOString().slice(0, 10));
 
@@ -45,49 +51,97 @@ export class ArrearsController {
     }).sort((a, b) => a.admissionNo.localeCompare(b.admissionNo));
   }
 
-  // Idempotent: students who already have a carry row (computed or manual) are left alone.
-  // Closing balance = what fromYear's bill shows as due today (fine included) minus anything owed back.
-  @Roles('ADMIN')
-  @Post('carry')
-  async carry(@CurrentUser() u: AuthUser, @Body() dto: CarryDto) {
-    assertSchool(u, dto.schoolId);
-    if (dto.fromYearId === dto.toYearId) throw new BadRequestException('fromYearId and toYearId must differ');
+  private async yearsOrThrow(fromYearId: number, toYearId: number) {
+    if (fromYearId === toYearId) throw new BadRequestException('fromYearId and toYearId must differ');
     const [from, to] = await Promise.all([
-      this.prisma.academicYear.findUniqueOrThrow({ where: { id: dto.fromYearId } }),
-      this.prisma.academicYear.findUniqueOrThrow({ where: { id: dto.toYearId } }),
+      this.prisma.academicYear.findUniqueOrThrow({ where: { id: fromYearId } }),
+      this.prisma.academicYear.findUniqueOrThrow({ where: { id: toYearId } }),
     ]);
     if (from.startDate >= to.startDate) throw new BadRequestException('toYearId must be a later year than fromYearId');
+  }
 
-    const targets = await this.prisma.enrollment.findMany({
-      where: {
-        yearId: dto.toYearId, student: { schoolId: dto.schoolId, active: true },
-        arrearCarry: null, withdrawal: null,
-      },
-      select: { id: true, studentId: true },
+  // Walks the FROM-year roster (not the to-year's), so nobody's balance can vanish unreported.
+  // One outcome per student. Closing balance = what fromYear's bill shows as due today (fine included) minus anything owed back.
+  // ponytail: one bill build per candidate; fine for school sizes, batch via buildMany if a school passes ~5k students.
+  private async scan(
+    schoolId: number, fromYearId: number, toYearId: number,
+    o: { studentIds?: number[]; commit?: string; onlyLeftBehind?: boolean },
+  ) {
+    const prevs = await this.prisma.enrollment.findMany({
+      where: { yearId: fromYearId, student: { schoolId, ...(o.studentIds ? { id: { in: o.studentIds } } : {}) } },
+      include: { student: true, withdrawal: true, section: { include: { standard: true } } },
     });
-    const result = { carried: 0, credits: 0, zero: 0, skippedWithdrawn: 0, skippedNotEnrolled: 0, skippedExisting: 0 };
-    for (const t of targets) {
+    const nexts = await this.prisma.enrollment.findMany({
+      where: { yearId: toYearId, studentId: { in: prevs.map((p) => p.studentId) } },
+      select: { id: true, studentId: true, arrearCarry: { select: { id: true } } },
+    });
+    const nextOf = new Map(nexts.map((n) => [n.studentId, n]));
+    const rows: { studentId: number; enrollmentId: number | null; admissionNo: string; name: string; className: string; outcome: Outcome; amount: string | null }[] = [];
+
+    for (const prev of prevs.sort((a, b) => a.student.admissionNo.localeCompare(b.student.admissionNo))) {
+      const next = nextOf.get(prev.studentId);
+      const row = (outcome: Outcome, amount: number | null = null) => rows.push({
+        studentId: prev.studentId, enrollmentId: next?.id ?? null, admissionNo: prev.student.admissionNo, name: prev.student.name,
+        className: `${prev.section.standard.name} ${prev.section.name}`, outcome, amount: amount === null ? null : fromPaise(amount),
+      });
+      if (o.onlyLeftBehind && next) continue;
+      // An inactive student without a withdrawal row is treated like a withdrawn one (matches the old behaviour of skipping inactive students).
+      if (prev.withdrawal || !prev.student.active) { row('SKIPPED_WITHDRAWN'); continue; }
+      if (next?.arrearCarry) { row('SKIPPED_EXISTING'); continue; }
+
       await this.prisma.$transaction(async (tx) => {
-        const prev = await tx.enrollment.findUnique({
-          where: { studentId_yearId: { studentId: t.studentId, yearId: dto.fromYearId } }, include: { withdrawal: true },
-        });
-        if (!prev) return void result.skippedNotEnrolled++;
-        if (prev.withdrawal) return void result.skippedWithdrawn++;
         // Same lock payments take, so a receipt can't land between reading the balance and freezing it.
         await tx.$queryRaw`SELECT id FROM "Enrollment" WHERE id = ${prev.id} FOR UPDATE`;
-        const bill = await this.billing.build(t.studentId, dto.fromYearId, today(), tx);
-        const closing = bill.totals.due - bill.installments.reduce((s, i) => s + i.excess, 0) - bill.arrear.excess;
-        if (closing === 0) return void result.zero++;
-        const { count } = await tx.arrearCarry.createMany({
-          data: [{ enrollmentId: t.id, fromYearId: dto.fromYearId, amount: fromPaise(closing), source: 'COMPUTED', createdBy: u.username }],
-          skipDuplicates: true,
-        });
-        if (!count) return void result.skippedExisting++;
-        if (closing > 0) result.carried++;
-        else result.credits++;
+        const bill = await this.billing.build(prev.studentId, fromYearId, today(), tx);
+        const closing = bill.totals.due - bill.installments.reduce((n, i) => n + i.excess, 0) - bill.arrear.excess;
+        if (closing === 0) return void row('SKIPPED_ZERO');
+        // Money is owed (or credited) but there is no to-year enrollment to hang it on: report, never drop silently.
+        if (!next) return void row('SKIPPED_NOT_ENROLLED_NEXT_YEAR', closing);
+        if (o.commit) {
+          const { count } = await tx.arrearCarry.createMany({
+            data: [{ enrollmentId: next.id, fromYearId, amount: fromPaise(closing), source: 'COMPUTED', createdBy: o.commit }],
+            skipDuplicates: true,
+          });
+          if (!count) return void row('SKIPPED_EXISTING');
+        }
+        row('CARRIED', closing);
       });
     }
-    return result;
+    return rows;
+  }
+
+  // Idempotent: students who already have a carry row (computed or manual) are left alone, and a student
+  // who was left behind is picked up by the next run once they are enrolled in toYear.
+  @Roles('ADMIN')
+  @Post('carry')
+  async carry(@CurrentUser() u: AuthUser, @Body() dto: CarryDto, @Query('dryRun') dryRunQ?: string) {
+    assertSchool(u, dto.schoolId);
+    await this.yearsOrThrow(dto.fromYearId, dto.toYearId);
+    const dryRun = dto.dryRun ?? dryRunQ === 'true';
+    const rows = await this.scan(dto.schoolId, dto.fromYearId, dto.toYearId, { studentIds: dto.studentIds, commit: dryRun ? undefined : u.username });
+    const n = (o: Outcome) => rows.filter((r) => r.outcome === o).length;
+    const carried = rows.filter((r) => r.outcome === 'CARRIED');
+    const left = rows.filter((r) => r.outcome === 'SKIPPED_NOT_ENROLLED_NEXT_YEAR');
+    return {
+      dryRun,
+      carried: carried.filter((r) => Number(r.amount) > 0).length,
+      credits: carried.filter((r) => Number(r.amount) < 0).length,
+      zero: n('SKIPPED_ZERO'), skippedWithdrawn: n('SKIPPED_WITHDRAWN'), skippedExisting: n('SKIPPED_EXISTING'), skippedNotEnrolled: left.length,
+      leftBehindDue: fromPaise(left.reduce((sum, r) => sum + toPaise(r.amount!), 0)),
+      rows,
+    };
+  }
+
+  // Students enrolled in fromYear with a non-zero balance and no toYear enrollment: their money is NOT carried.
+  @Get('unpromoted')
+  async unpromoted(
+    @CurrentUser() u: AuthUser, @Query('schoolId', ParseIntPipe) schoolId: number,
+    @Query('fromYearId', ParseIntPipe) fromYearId: number, @Query('toYearId', ParseIntPipe) toYearId: number,
+  ) {
+    assertSchool(u, schoolId);
+    await this.yearsOrThrow(fromYearId, toYearId);
+    const rows = (await this.scan(schoolId, fromYearId, toYearId, { onlyLeftBehind: true })).filter((r) => r.outcome === 'SKIPPED_NOT_ENROLLED_NEXT_YEAR');
+    return rows.map(({ studentId, admissionNo, name, className, amount }) => ({ studentId, admissionNo, name, className, due: amount! }));
   }
 
   // Manual set / waive. Never lets the net arrear fall below what has already been paid against it.

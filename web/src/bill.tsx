@@ -4,6 +4,7 @@ export type Bill = {
   student: { admissionNo: string; name: string; className: string }
   installments: { installmentId: number; label: string; dueDate: string; lines: { feeHeadId: number; name: string; amount: string }[]; charges: string; fine: string; fineDays: number; paid: string; due: string }[]
   arrear?: { amount: string; paid: string; due: string; excess: string }
+  bounce?: { amount: string; paid: string; due: string; items: { receiptNo: number; amount: string }[] }
   totals: { charges: string; fine: string; paid: string; due: string }
 }
 
@@ -21,6 +22,10 @@ export function BillView({ bill }: { bill: Bill }) {
           ? [{ label: 'Previous arrear', children: Number(bill.arrear.amount) > 0
               ? `${inr(bill.arrear.amount)} · paid ${inr(bill.arrear.paid)} · due ${inr(bill.arrear.due)}`
               : `Credit ${inr(String(-Number(bill.arrear.amount)))} (reduces the first installments)` }]
+          : []),
+        // Charge levied on bounced cheques: folded into the totals below, payable like any dues, never fined.
+        ...(bill.bounce && Number(bill.bounce.amount) > 0
+          ? [{ label: 'Bounce charge', children: `${inr(bill.bounce.amount)} (receipt ${bill.bounce.items.map((i) => `#${i.receiptNo}`).join(', ')}) · paid ${inr(bill.bounce.paid)} · due ${inr(bill.bounce.due)}` }]
           : []),
       ]} />
       <Table rowKey="installmentId" dataSource={bill.installments} pagination={false} size="small" scroll={{ x: true }}

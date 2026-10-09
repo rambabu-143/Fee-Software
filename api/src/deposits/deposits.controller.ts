@@ -7,6 +7,7 @@ import { DepositKind, PaymentMode } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { assertSchool, CurrentUser, Roles, type AuthUser } from '../auth/auth.guard.js';
 import { fromPaise, toPaise } from '../billing/bill.js';
+import { voucherKindOf } from '../billing/deposit-sync.js';
 
 class CreateDepositDto {
   @IsInt() studentId: number;
@@ -167,14 +168,24 @@ export class DepositsController {
     if (refund + deduction !== toPaise(d.amount.toFixed(2))) {
       throw new BadRequestException(`Refund + deduction must equal the deposit (₹${d.amount.toFixed(2)})`);
     }
-    const { count } = await this.prisma.deposit.updateMany({
-      where: { id, status: 'HELD' },
-      data: {
-        status: refund === 0 ? 'FORFEITED' : 'REFUNDED', refundedAt: date, refundAmount: fromPaise(refund), deduction: fromPaise(deduction),
-        refundMode: dto.mode, refundRef: dto.mode === 'CASH' ? null : dto.reference, remarks: dto.remarks,
-      },
+    await this.prisma.$transaction(async (tx) => {
+      // Same student lock as voucher create/cancel: a payout can't slip in between the check and the update.
+      await tx.$queryRaw`SELECT id FROM "Student" WHERE id = ${d.studentId} FOR UPDATE`;
+      // Money already paid out by vouchers can't exceed what the refund decision allows.
+      const vk = voucherKindOf(d.kind);
+      const paidOut = vk
+        ? toPaise(((await tx.voucher.aggregate({ _sum: { amount: true }, where: { enrollment: { studentId: d.studentId }, kind: vk, cancelledAt: null } }))._sum.amount ?? 0).toString())
+        : 0;
+      if (paidOut > refund) throw new BadRequestException(`Vouchers have already paid out ₹${fromPaise(paidOut)}, more than this refund`);
+      const { count } = await tx.deposit.updateMany({
+        where: { id, status: 'HELD' },
+        data: {
+          status: refund === 0 ? 'FORFEITED' : 'REFUNDED', refundedAt: date, refundAmount: fromPaise(refund), deduction: fromPaise(deduction),
+          refundMode: dto.mode, refundRef: dto.mode === 'CASH' ? null : dto.reference, remarks: dto.remarks,
+        },
+      });
+      if (!count) throw new BadRequestException('Deposit is no longer held (already refunded, forfeited or adjusted)');
     });
-    if (!count) throw new BadRequestException('Deposit is no longer held (already refunded, forfeited or adjusted)');
     const [row] = await this.rows({ id });
     return present(row);
   }

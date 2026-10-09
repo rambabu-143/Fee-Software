@@ -2,6 +2,7 @@ import { Button, Card, Checkbox, DatePicker, Empty, Input, Select, Space, Table,
 import dayjs from 'dayjs'
 import { useEffect, useMemo, useState } from 'react'
 import { api, downloadFile } from '../api'
+import { useCan } from '../session'
 import { useSelection } from '../selection'
 
 type Opt = { value: string | number; label: string }
@@ -39,10 +40,25 @@ const REPORTS: Report[] = [
 ]
 
 const cell = (v: unknown) => (v === null || v === undefined ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v))
+// admissionNo -> "Admission No"; the map covers acronyms and names the generic split gets wrong.
+const HEADERS: Record<string, string> = {
+  className: 'Class', dob: 'DOB', penNo: 'PEN No', cbseRegNo: 'CBSE Reg No', aadhaar: 'Aadhaar', amountPerInstallment: 'Amount / Installment',
+  concessionAmount: 'Concession (₹)', familyId: 'Family ID', staffBranch: 'Staff Branch', fullPaying: 'Full Paying',
+}
+const humanize = (k: string) => HEADERS[k] ?? k.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/^./, (c) => c.toUpperCase()).replace(/\bId\b/g, 'ID')
+// Columns whose every filled value is a plain number, except codes that only look numeric (admission no, phone...).
+const isNumeric = (key: string, rows: Record<string, unknown>[]) => {
+  if (/(no|id|phone|mobile|aadhaar|pin|code)$/i.test(key)) return false
+  const vals = rows.map((r) => r[key]).filter((v) => v !== '' && v != null)
+  return vals.length > 0 && vals.every((v) => /^-?\d+(\.\d+)?$/.test(String(v)))
+}
+// 2-decimal strings are money from the API: show them Indian-grouped. Counts and other numbers stay as sent.
+const money = (v: unknown) => (/^-?\d+\.\d{2}$/.test(String(v)) ? Number(v).toLocaleString('en-IN', { minimumFractionDigits: 2 }) : cell(v))
 const toOpts = <T extends { id: number }>(rows: T[], label: (r: T) => string): Opt[] => rows.map((r) => ({ value: r.id, label: label(r) }))
 
 export default function MoreReports() {
   const { schoolId, yearId } = useSelection()
+  const can = useCan()
   const [report, setReport] = useState(REPORTS[0])
   const [values, setValues] = useState<Record<string, string | boolean | undefined>>({})
   const [rows, setRows] = useState<Record<string, unknown>[] | null>(null)
@@ -114,7 +130,7 @@ export default function MoreReports() {
       <style>{'@media print { .no-print { display: none !important } .ant-layout-sider, .ant-layout-header { display: none !important } }'}</style>
       <Card className="no-print" style={{ marginBottom: 16 }}>
         <Space wrap align="end">
-          <Select style={{ width: 260 }} value={report.key} onChange={pick} options={REPORTS.map((r) => ({ value: r.key, label: r.label }))} />
+          <Select style={{ width: 260 }} value={report.key} onChange={pick} options={REPORTS.filter((r) => r.key !== 'suggest' || can('reports.suggestions')).map((r) => ({ value: r.key, label: r.label }))} />
           {report.fields.map((f) => f.kind === 'text' ? (
             <Input key={f.key} placeholder={f.label} style={{ width: 160 }} value={values[f.key] as string} onChange={(e) => set(f.key, e.target.value)} />
           ) : f.kind === 'date' ? (
@@ -134,7 +150,15 @@ export default function MoreReports() {
       <h3 style={{ display: rows ? 'block' : 'none' }}>{report.label} {rows && `(${rows.length})`}</h3>
       {rows && !rows.length ? <Empty description="No rows" /> : rows && (
         <Table size="small" rowKey={(_, i) => String(i)} dataSource={rows} scroll={{ x: true }} pagination={{ pageSize: 50 }}
-          columns={columns.map((c) => ({ title: c, dataIndex: c, render: cell }))} />
+          columns={columns.map((c) => {
+            const num = isNumeric(c, rows)
+            const title = humanize(c)
+            return {
+              title, dataIndex: c, align: num ? ('right' as const) : ('left' as const), render: num ? money : cell,
+              width: Math.max(num ? 90 : 110, title.length * 9 + 32),
+              sorter: (a: Record<string, unknown>, b: Record<string, unknown>) => num ? Number(a[c] || 0) - Number(b[c] || 0) : cell(a[c]).localeCompare(cell(b[c])),
+            }
+          })} />
       )}
     </>
   )

@@ -1,6 +1,7 @@
 import { Button, Card, Form, Input, Modal, Popconfirm, Select, Space, Table, message } from 'antd'
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import { Gate } from '../session'
 import { useSelection } from '../selection'
 
 type Occupation = { id: number; name: string; parentId: number | null }
@@ -38,13 +39,13 @@ function Catalogue<T extends { id: number; name: string }>(props: {
     }
   }
   return (
-    <Card title={props.title} extra={<Button type="primary" onClick={() => { form.resetFields(); form.setFieldsValue(props.initial); setEditing({}) }}>Add</Button>}>
+    <Card title={props.title} extra={<Gate cap="catalog.write"><Button type="primary" onClick={() => { form.resetFields(); form.setFieldsValue(props.initial); setEditing({}) }}>Add</Button></Gate>}>
       <Table size="small" rowKey="id" dataSource={rows} pagination={false} columns={[
         { title: 'Name', dataIndex: 'name' }, ...props.columns.map((c) => ({ title: c.title, render: (_: unknown, r: T) => c.render(r) })),
         { title: '', render: (_: unknown, r: T) => (
           <Space>
-            <Button size="small" onClick={() => { form.resetFields(); form.setFieldsValue(r); setEditing(r) }}>Edit</Button>
-            <Popconfirm title="Delete?" onConfirm={() => remove(r.id)}><Button size="small" danger>Delete</Button></Popconfirm>
+            <Gate cap="catalog.write" hide><Button size="small" onClick={() => { form.resetFields(); form.setFieldsValue(r); setEditing(r) }}>Edit</Button></Gate>
+            <Gate cap="catalog.write" hide><Popconfirm title="Delete?" onConfirm={() => remove(r.id)}><Button size="small" danger>Delete</Button></Popconfirm></Gate>
           </Space>
         ) },
       ]} />

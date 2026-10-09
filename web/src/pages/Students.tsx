@@ -1,9 +1,10 @@
 import {
   Button, Checkbox, Drawer, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tag, message,
 } from 'antd'
-import { useEffect, useState } from 'react'
-import { api, openPdf } from '../api'
+import { useEffect, useRef, useState } from 'react'
+import { api, apiWithTotal, openPdf } from '../api'
 import { useSelection } from '../selection'
+import { Gate } from '../session'
 import { BillView, type Bill } from '../bill'
 import { ConcessionsModal } from '../concessions'
 import { FacilitiesModal } from '../facilities'
@@ -22,6 +23,7 @@ type Student = {
 export default function Students() {
   const { schoolId, yearId } = useSelection()
   const [rows, setRows] = useState<Student[]>([])
+  const [paging, setPaging] = useState({ current: 1, pageSize: 25, total: 0 })
   const [standards, setStandards] = useState<Standard[]>([])
   const [heads, setHeads] = useState<FeeHead[]>([])
   const optionalHeads = heads.filter((x) => x.type === 'OPTIONAL')
@@ -45,16 +47,27 @@ export default function Students() {
       .catch((e) => message.error(e.message))
   }, [schoolId])
 
+  const seq = useRef(0) // drops the response of a superseded request (filter changed while it was in flight)
   const load = async () => {
     if (!schoolId || !yearId) return
+    const mine = ++seq.current
     const qs = new URLSearchParams({ schoolId: String(schoolId), yearId: String(yearId) })
     if (filter.standardId) qs.set('standardId', String(filter.standardId))
     if (filter.q) qs.set('q', filter.q)
-    setRows(await api<Student[]>(`/students?${qs}`))
+    qs.set('limit', String(paging.pageSize))
+    qs.set('offset', String((paging.current - 1) * paging.pageSize))
+    const { data, total } = await apiWithTotal<Student[]>(`/students?${qs}`)
+    if (mine !== seq.current) return
+    setRows(data)
+    setPaging((p) => (p.total === total ? p : { ...p, total }))
   }
+  // A new filter/school/year starts back at page 1; page or page-size changes just reload.
+  useEffect(() => {
+    setPaging((p) => (p.current === 1 ? p : { ...p, current: 1 }))
+  }, [schoolId, yearId, filter])
   useEffect(() => {
     load().catch((e) => message.error(e.message))
-  }, [schoolId, yearId, filter])
+  }, [schoolId, yearId, filter, paging.current, paging.pageSize])
 
   const sectionOptions = standards.flatMap((s) => s.sections.map((sec) => ({ value: sec.id, label: `${s.name} ${sec.name}` })))
 
@@ -97,14 +110,14 @@ export default function Students() {
   return (
     <>
       <Space wrap style={{ marginBottom: 16 }}>
-        <Button type="primary" onClick={() => open()}>Admit student</Button>
+        <Gate cap="students.write"><Button type="primary" onClick={() => open()}>Admit student</Button></Gate>
         <Select allowClear placeholder="All classes" style={{ minWidth: 160 }} value={filter.standardId}
           onChange={(standardId) => setFilter((f) => ({ ...f, standardId }))}
           options={standards.map((s) => ({ value: s.id, label: s.name }))} />
         <Input.Search allowClear placeholder="Name or admission no." style={{ width: 240 }}
           onSearch={(q) => setFilter((f) => ({ ...f, q }))} />
       </Space>
-      <Table rowKey="id" dataSource={rows} scroll={{ x: true }} pagination={{ pageSize: 25 }} columns={[
+      <Table rowKey="id" dataSource={rows} scroll={{ x: true }} pagination={{ ...paging, showSizeChanger: true, onChange: (current, pageSize) => setPaging((p) => ({ ...p, current, pageSize })) }} columns={[
         { title: 'Adm. no.', dataIndex: 'admissionNo' },
         { title: 'Name', dataIndex: 'name', render: (v, r) => <>{v} {!r.active && <Tag color="red">Inactive</Tag>}</> },
         { title: 'Class', render: (_, r) => r.enrollment.className },
@@ -115,19 +128,21 @@ export default function Students() {
           render: (_, r) => (
             <Space>
               <Button size="small" onClick={() => showBill(r.id)}>Bill</Button>
-              <Button size="small" onClick={() => open(r)}>Edit</Button>
-              <Button size="small" onClick={() => setConc(r)}>Concessions</Button>
-              <Button size="small" onClick={() => setFine(r)}>Fines</Button>
-              <Button size="small" onClick={() => setFac(r)}>Transport/Hostel</Button>
+              <Gate cap="students.write" hide><Button size="small" onClick={() => open(r)}>Edit</Button></Gate>
+              <Gate cap="students.concessions" hide><Button size="small" onClick={() => setConc(r)}>Concessions</Button></Gate>
+              <Gate cap="students.fines" hide><Button size="small" onClick={() => setFine(r)}>Fines</Button></Gate>
+              <Gate cap="students.facilities" hide><Button size="small" onClick={() => setFac(r)}>Transport/Hostel</Button></Gate>
               <Button size="small" onClick={() => setGuard(r)}>Guardians & subjects</Button>
               {r.active ? (
-                <Button size="small" danger onClick={() => setLeaving(r)}>Withdraw</Button>
+                <Gate cap="students.withdraw" hide><Button size="small" danger onClick={() => setLeaving(r)}>Withdraw</Button></Gate>
               ) : (
                 <>
                   <Button size="small" onClick={() => openPdf(`/students/${r.id}/withdrawal/pdf?yearId=${yearId}`).catch((e) => message.error(e.message))}>Slip</Button>
-                  <Popconfirm title="Re-admit this student? Charges after the leaving date return." onConfirm={() => readmit(r.id)}>
-                    <Button size="small">Re-admit</Button>
-                  </Popconfirm>
+                  <Gate cap="students.withdrawalUndo" hide>
+                    <Popconfirm title="Re-admit this student? Charges after the leaving date return." onConfirm={() => readmit(r.id)}>
+                      <Button size="small">Re-admit</Button>
+                    </Popconfirm>
+                  </Gate>
                 </>
               )}
             </Space>

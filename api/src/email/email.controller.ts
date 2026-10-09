@@ -1,9 +1,11 @@
 import {
-  BadRequestException, Body, Controller, Delete, Get, NotFoundException, Param, ParseDatePipe, ParseIntPipe, Patch, Post, Query,
+  BadRequestException, Body, Controller, Delete, Get, NotFoundException, Param, ParseDatePipe, ParseIntPipe, Patch, Post, Query, Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { OmitType, PartialType } from '@nestjs/mapped-types';
 import { ArrayMaxSize, ArrayMinSize, IsArray, IsInt, IsString, Matches, MinLength } from 'class-validator';
 import type { Prisma } from '../generated/prisma/client.js';
+import { page } from '../common/paging.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { assertSchool, CurrentUser, Roles, type AuthUser } from '../auth/auth.guard.js';
 import { BillingService } from '../billing/billing.service.js';
@@ -18,7 +20,7 @@ class EmailTemplateDto {
 }
 class UpdateEmailTemplateDto extends PartialType(OmitType(EmailTemplateDto, ['schoolId'] as const)) {}
 
-class SendDto {
+class SendEmailDto {
   @IsInt() schoolId: number;
   @IsInt() templateId: number;
   @IsInt() yearId: number;
@@ -72,7 +74,7 @@ export class EmailController {
   // Goes to the student's own, father's and mother's addresses (valid + distinct only). A failure never aborts the batch.
   @Roles('ADMIN', 'ACCOUNTANT')
   @Post('email/send')
-  async send(@CurrentUser() u: AuthUser, @Body() dto: SendDto) {
+  async send(@CurrentUser() u: AuthUser, @Body() dto: SendEmailDto) {
     assertSchool(u, dto.schoolId);
     const tpl = await this.prisma.emailTemplate.findFirst({ where: { id: dto.templateId, schoolId: dto.schoolId, active: true } });
     if (!tpl) throw new BadRequestException('Unknown or inactive template');
@@ -101,22 +103,28 @@ export class EmailController {
 
   @Roles('ADMIN', 'ACCOUNTANT')
   @Get('email/log')
-  log(
+  async log(
     @CurrentUser() u: AuthUser,
     @Query('schoolId', ParseIntPipe) schoolId: number,
     @Query('from', new ParseDatePipe({ optional: true })) from?: Date,
     @Query('to', new ParseDatePipe({ optional: true })) to?: Date,
     @Query('status') status?: string,
+    @Query('limit', new ParseIntPipe({ optional: true })) limit?: number,
+    @Query('offset', new ParseIntPipe({ optional: true })) offset?: number,
+    @Res({ passthrough: true }) res?: Response,
   ) {
     assertSchool(u, schoolId);
     if (status && !['QUEUED', 'SENT', 'FAILED'].includes(status)) throw new BadRequestException('Bad status');
-    return this.prisma.emailLog.findMany({
-      where: {
-        schoolId, ...(status ? { status: status as 'SENT' } : {}),
-        ...(from || to ? { createdAt: { ...(from ? { gte: from } : {}), ...(to ? { lt: new Date(+to + 864e5) } : {}) } } : {}),
-      },
-      orderBy: { id: 'desc' },
-      take: 500, // ponytail: cap instead of pagination
-    });
+    const where = {
+      schoolId, ...(status ? { status: status as 'SENT' } : {}),
+      ...(from || to ? { createdAt: { ...(from ? { gte: from } : {}), ...(to ? { lt: new Date(+to + 864e5) } : {}) } } : {}),
+    };
+    // No limit = newest 500, as before; with limit/offset page through, X-Total-Count has the full match count.
+    const [rows, total] = await Promise.all([
+      this.prisma.emailLog.findMany({ where, orderBy: { id: 'desc' }, ...page(limit, offset, 500) }),
+      this.prisma.emailLog.count({ where }),
+    ]);
+    res?.setHeader('X-Total-Count', total);
+    return rows;
   }
 }

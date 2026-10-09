@@ -1,6 +1,7 @@
 import { Alert, Button, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Typography, message } from 'antd'
 import { useEffect, useState } from 'react'
 import { api, postPdf } from '../api'
+import { Gate } from '../session'
 import { useSelection } from '../selection'
 import { inr } from '../bill'
 
@@ -228,14 +229,14 @@ function TemplatesModal({ open, schoolId, rows, onClose, onChange }: {
 
   return (
     <Modal title="Letter templates" open={open} onCancel={onClose} footer={null} width={720}>
-      <Button type="primary" onClick={() => edit('new')} style={{ marginBottom: 12 }}>Add template</Button>
+      <Gate cap="defaulters.templates"><Button type="primary" onClick={() => edit('new')} style={{ marginBottom: 12 }}>Add template</Button></Gate>
       <Table rowKey="id" size="small" pagination={false} dataSource={rows} columns={[
         { title: 'Name', dataIndex: 'name' },
         { title: 'Body', dataIndex: 'body', ellipsis: true },
         { title: '', render: (_, t) => (
           <Space>
-            <Button size="small" onClick={() => edit(t)}>Edit</Button>
-            <Popconfirm title="Delete this template?" onConfirm={() => del(t.id)}><Button size="small" danger>Delete</Button></Popconfirm>
+            <Gate cap="defaulters.templates" hide><Button size="small" onClick={() => edit(t)}>Edit</Button></Gate>
+            <Gate cap="defaulters.templates" hide><Popconfirm title="Delete this template?" onConfirm={() => del(t.id)}><Button size="small" danger>Delete</Button></Popconfirm></Gate>
           </Space>
         ) },
       ]} />

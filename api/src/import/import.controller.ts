@@ -7,7 +7,7 @@ import { validEmail } from '../email/email.provider.js';
 
 const MAX_ROWS = 2000;
 
-class ImportDto {
+class StudentImportDto {
   @IsInt() schoolId: number;
   @IsInt() yearId: number;
   // Rows are validated one by one below so the caller gets every problem at once, not just the first.
@@ -17,7 +17,13 @@ class ImportDto {
 type Clean = {
   admissionNo: string; name: string; sectionId: number; rollNo?: number; isNewAdmission?: boolean;
   dob?: Date; fatherName?: string; motherName?: string; phone?: string; email?: string;
+  admissionDate?: Date; gender?: 'M' | 'F' | 'OTHER'; religion?: string; category?: string; nationality?: string;
+  address?: string; fatherEmail?: string; motherEmail?: string;
 };
+
+const GENDER: Record<string, 'M' | 'F' | 'OTHER'> = { m: 'M', male: 'M', boy: 'M', f: 'F', female: 'F', girl: 'F', other: 'OTHER', o: 'OTHER' };
+const PLAIN = ['religion', 'category', 'nationality', 'address'] as const;
+const EMAILS = ['fatherEmail', 'motherEmail'] as const;
 
 const str = (v: unknown) => (v == null ? '' : String(v).trim());
 
@@ -29,7 +35,7 @@ export class ImportController {
   // The real run is one transaction: any bad row => nothing saved. Re-running the same file is a no-op (upsert).
   @Roles('ADMIN')
   @Post('students')
-  async students(@CurrentUser() u: AuthUser, @Query('dryRun') dryRun: string | undefined, @Body() dto: ImportDto) {
+  async students(@CurrentUser() u: AuthUser, @Query('dryRun') dryRun: string | undefined, @Body() dto: StudentImportDto) {
     assertSchool(u, dto.schoolId);
     const live = dryRun === 'false';
     if (!(await this.prisma.academicYear.findUnique({ where: { id: dto.yearId } }))) throw new BadRequestException('Unknown year');
@@ -54,10 +60,15 @@ export class ImportController {
 
       const out: Clean = { admissionNo, name, sectionId: sid ?? 0 };
       if (str(raw.rollNo)) { const n = Number(raw.rollNo); Number.isInteger(n) && n > 0 ? (out.rollNo = n) : bad('rollNo must be a positive whole number'); }
-      if (str(raw.dob)) {
-        const d = new Date(str(raw.dob));
-        /^\d{4}-\d{2}-\d{2}$/.test(str(raw.dob)) && !isNaN(+d) ? (out.dob = d) : bad('dob must be a valid YYYY-MM-DD date');
+      for (const k of ['dob', 'admissionDate'] as const) {
+        if (!str(raw[k])) continue;
+        const d = new Date(str(raw[k]));
+        // round-trip check rejects 2026-02-31, which Date would silently roll into March
+        /^\d{4}-\d{2}-\d{2}$/.test(str(raw[k])) && !isNaN(+d) && d.toISOString().startsWith(str(raw[k])) ? (out[k] = d) : bad(`${k} must be a valid YYYY-MM-DD date`);
       }
+      if (str(raw.gender)) { const g = GENDER[str(raw.gender).toLowerCase()]; g ? (out.gender = g) : bad('gender must be M, F or OTHER'); }
+      for (const k of PLAIN) if (str(raw[k])) out[k] = str(raw[k]);
+      for (const k of EMAILS) if (str(raw[k])) validEmail(str(raw[k])) ? (out[k] = str(raw[k])) : bad(`Invalid ${k}`);
       if (str(raw.phone)) { const p = normalizeMobile(str(raw.phone)); p ? (out.phone = p) : bad('Invalid phone number'); }
       if (str(raw.email)) validEmail(str(raw.email)) ? (out.email = str(raw.email)) : bad('Invalid email');
       if (str(raw.fatherName)) out.fatherName = str(raw.fatherName);

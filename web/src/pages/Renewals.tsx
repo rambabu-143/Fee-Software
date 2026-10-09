@@ -1,6 +1,7 @@
 import { Alert, Button, Card, Form, Modal, Popconfirm, Select, Space, Table, Tag, message } from 'antd'
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import { Gate } from '../session'
 import { useSelection } from '../selection'
 import { qs, useRoster } from '../moneyShared'
 
@@ -64,9 +65,9 @@ export default function Renewals() {
         <Space wrap>
           Apply pending decisions into
           <Select style={{ width: 140 }} value={toYearId} onChange={setToYearId} placeholder="Year" options={years.filter((y) => y.id !== yearId).map((y) => ({ value: y.id, label: y.label }))} />
-          <Popconfirm title="Apply every pending renewal?" description="Renew copies the transport stops; withdraw stops them. Safe to repeat." onConfirm={apply}>
+          <Gate cap="renewals.admin"><Popconfirm title="Apply every pending renewal?" description="Renew copies the transport stops; withdraw stops them. Safe to repeat." onConfirm={apply}>
             <Button type="primary" loading={applying} disabled={!toYearId}>Apply</Button>
-          </Popconfirm>
+          </Popconfirm></Gate>
         </Space>
         {applied && (
           <div style={{ marginTop: 12 }}>
@@ -96,9 +97,9 @@ export default function Renewals() {
         { title: 'Entered by', dataIndex: 'filledBy' },
         // ponytail: shown to all; the API allows only ADMIN to delete and returns 403 otherwise.
         { title: '', render: (_, r) => r.status !== 'APPLIED' && (
-          <Popconfirm title="Remove this decision?" onConfirm={() => api(`/transport-renewals/${r.id}`, { method: 'DELETE' }).then(load).catch((e) => message.error(e.message))}>
+          <Gate cap="renewals.admin" hide><Popconfirm title="Remove this decision?" onConfirm={() => api(`/transport-renewals/${r.id}`, { method: 'DELETE' }).then(load).catch((e) => message.error(e.message))}>
             <Button size="small" danger>Remove</Button>
-          </Popconfirm>
+          </Popconfirm></Gate>
         ) },
       ]} />
 

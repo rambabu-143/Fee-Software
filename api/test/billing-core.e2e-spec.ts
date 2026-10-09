@@ -124,7 +124,7 @@ describe('billing core: arrears + banking (e2e)', () => {
       expect(owingDue).toBeGreaterThan(0);
 
       const r = (await carry().expect(201)).body;
-      expect(r).toMatchObject({ carried: 1, credits: 0, zero: 1, skippedWithdrawn: 1, skippedNotEnrolled: 1, skippedExisting: 0 });
+      expect(r).toMatchObject({ carried: 1, credits: 0, zero: 1, skippedWithdrawn: 1, skippedNotEnrolled: 0, skippedExisting: 0 }); // the target-year-only student is not on the from-year roster
 
       const rows = await arrears();
       expect(rows).toHaveLength(1);
@@ -133,7 +133,7 @@ describe('billing core: arrears + banking (e2e)', () => {
       expect(Number(rows[0].due)).toBeCloseTo(owingDue, 2);
 
       // Second run: nothing new. The settled student (zero) is simply re-evaluated to zero again.
-      expect((await carry().expect(201)).body).toMatchObject({ carried: 0, credits: 0, zero: 1, skippedExisting: 0 });
+      expect((await carry().expect(201)).body).toMatchObject({ carried: 0, credits: 0, zero: 1, skippedExisting: 1 });
       expect(await arrears()).toHaveLength(1);
       expect(await prisma.arrearCarry.count({ where: { enrollmentId: owing.toEnr } })).toBe(1);
     });
@@ -330,7 +330,7 @@ describe('billing core: arrears + banking (e2e)', () => {
       const b = (await rec(p.id, { status: 'BOUNCED', bounceCharge: 250 }).expect(201)).body;
       expect(b).toMatchObject({ clearStatus: 'BOUNCED', bounceCharge: '250' , receiptNo: p.receiptNo });
       expect(b.bouncedAt).toBeTruthy();
-      expect(Number((await bill(stu.id, yearId)).totals.due)).toBeCloseTo(dueBefore, 2); // due restored
+      expect(Number((await bill(stu.id, yearId)).totals.due)).toBeCloseTo(dueBefore + 250, 2); // due restored, plus the 250 bounce charge now owed
       expect(Number(await upiRow())).toBeCloseTo(upiBefore, 2); // report excludes it
       expect((await http().get(`/api/payments/${p.id}`).set(H.admin).expect(200)).body.receiptNo).toBe(p.receiptNo); // still listed
       await rec(p.id, { status: 'BOUNCED' }).expect(400);
@@ -340,7 +340,7 @@ describe('billing core: arrears + banking (e2e)', () => {
       // The money can be collected again (a fresh receipt), and the bounced one is not double-counted.
       const again = (await pay(stu.id, yearId, { amount: 100, mode: 'UPI', reference: 'UTR-4005' }).expect(201)).body;
       expect(again.receiptNo).toBeGreaterThan(p.receiptNo);
-      expect(Number((await bill(stu.id, yearId)).totals.due)).toBeCloseTo(dueBefore - 100, 2);
+      expect(Number((await bill(stu.id, yearId)).totals.due)).toBeCloseTo(dueBefore + 250 - 100, 2);
     });
 
     it('bouncing an earlier receipt is refused while a later live one exists; bouncing the later one first works', async () => {

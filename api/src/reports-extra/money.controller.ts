@@ -104,7 +104,7 @@ export class MoneyReportsController {
     return m;
   }
 
-  // What was collected, split into fee heads (+ Fine, Arrear). groupBy=class (default) | student.
+  // What was collected, split into fee heads (+ Fine, Arrear, Bounce charge). groupBy=class (default) | student.
   // Withdrawn students' receipts are included: money collected is money collected.
   @Get('bifurcation')
   async bifurcation(
@@ -240,7 +240,7 @@ export class MoneyReportsController {
     return respond(out, format, 'concessions-summary');
   }
 
-  // Collection by payment mode, or split into fee heads (+ Fine, Arrear), for a date range.
+  // Collection by payment mode, or split into fee heads (+ Fine, Arrear, Bounce charge), for a date range.
   @Get('payments-summary')
   async paymentsSummary(
     @CurrentUser() u: AuthUser,

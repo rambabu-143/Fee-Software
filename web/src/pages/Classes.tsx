@@ -1,6 +1,7 @@
 import { Button, Form, Input, InputNumber, Modal, Popconfirm, Space, Table, Tag, message } from 'antd'
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import { Gate, useCan } from '../session'
 import { useSelection } from '../selection'
 
 type Section = { id: number; name: string; classTeacher?: string | null }
@@ -8,6 +9,7 @@ type Standard = { id: number; name: string; sortOrder: number; sections: Section
 
 export default function Classes() {
   const { schoolId } = useSelection()
+  const edit = useCan()('standards.write')
   const [rows, setRows] = useState<Standard[]>([])
   const [editing, setEditing] = useState<Partial<Standard> | null>(null)
   const [teacher, setTeacher] = useState<Section | null>(null)
@@ -40,12 +42,12 @@ export default function Classes() {
 
   return (
     <>
-      <Button type="primary" style={{ marginBottom: 16 }} onClick={() => {
+      <Gate cap="standards.write"><Button type="primary" style={{ marginBottom: 16 }} onClick={() => {
         form.setFieldsValue({ name: '', sortOrder: rows.length })
         setEditing({})
       }}>
         Add class
-      </Button>
+      </Button></Gate>
       <Table rowKey="id" dataSource={rows} pagination={false} scroll={{ x: true }} columns={[
         { title: 'Order', dataIndex: 'sortOrder', width: 80 },
         { title: 'Class', dataIndex: 'name' },
@@ -54,8 +56,9 @@ export default function Classes() {
           render: (_, r) => (
             <Space wrap>
               {r.sections.map((s) => (
-                <Tag key={s.id} closable style={{ cursor: 'pointer' }} title="Click to set class teacher"
+                <Tag key={s.id} closable={edit} style={{ cursor: edit ? 'pointer' : 'default' }} title={edit ? 'Click to set class teacher' : undefined}
                   onClick={() => {
+                    if (!edit) return
                     setTeacherName(s.classTeacher ?? '')
                     setTeacher(s)
                   }}
@@ -66,8 +69,8 @@ export default function Classes() {
                   {s.name}{s.classTeacher ? ` · ${s.classTeacher}` : ''}
                 </Tag>
               ))}
-              <Input size="small" placeholder="+ Section, Enter" style={{ width: 130 }}
-                onPressEnter={(e) => addSection(r.id, e.currentTarget)} />
+              {edit && <Input size="small" placeholder="+ Section, Enter" style={{ width: 130 }}
+                onPressEnter={(e) => addSection(r.id, e.currentTarget)} />}
             </Space>
           ),
         },
@@ -75,13 +78,13 @@ export default function Classes() {
           title: '',
           render: (_, r) => (
             <Space>
-              <Button size="small" onClick={() => {
+              <Gate cap="standards.write" hide><Button size="small" onClick={() => {
                 form.setFieldsValue(r)
                 setEditing(r)
-              }}>Edit</Button>
-              <Popconfirm title="Delete this class?" onConfirm={() => run(api(`/standards/${r.id}`, { method: 'DELETE' }))}>
+              }}>Edit</Button></Gate>
+              <Gate cap="standards.write" hide><Popconfirm title="Delete this class?" onConfirm={() => run(api(`/standards/${r.id}`, { method: 'DELETE' }))}>
                 <Button size="small" danger>Delete</Button>
-              </Popconfirm>
+              </Popconfirm></Gate>
             </Space>
           ),
         },

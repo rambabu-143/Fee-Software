@@ -115,8 +115,8 @@ export function tcPdf({ school, serialNo, duplicate, year, p }: TcData) {
 export type FeeCertData = {
   school: SchoolHead; year: string
   student: { admissionNo: string; name: string; fatherName: string | null; motherName: string | null; className: string }
-  lines: { date: string; receiptNo: number; mode: string; installments: string; charges: string; fine: string; amount: string }[]
-  total: string
+  lines: { date: string; receiptNo: number; mode: string; installments: string; charges: string; fine: string; refundable: string; amount: string }[]
+  total: string; refundableTotal: string; eligibleTotal: string
 }
 
 export function feeCertPdf(d: FeeCertData) {
@@ -125,7 +125,7 @@ export function feeCertPdf(d: FeeCertData) {
     doc.text(`This is to certify that ${d.student.name} (Admission No. ${d.student.admissionNo}), ${d.student.className}, ` +
       `ward of ${dash(d.student.fatherName ?? d.student.motherName)}, has paid the following fees to the school during the academic session ${d.year}.`, { align: 'justify' }).moveDown();
     const left = doc.page.margins.left;
-    const widths = [62, 48, 62, 115, 70, 55, 83]; // 495pt = A4 usable width
+    const widths = [52, 40, 52, 95, 60, 48, 70, 78]; // 495pt = A4 usable width
     const line = (cells: string[], bold = false) => {
       if (doc.y > doc.page.height - 120) doc.addPage();
       const y = doc.y;
@@ -135,11 +135,13 @@ export function feeCertPdf(d: FeeCertData) {
       doc.y = y + (cells[3].length > 22 ? 24 : 15);
       doc.x = left;
     };
-    line(['Date', 'Receipt', 'Mode', 'Installments', 'Charges', 'Fine', 'Total'], true);
-    d.lines.forEach((l) => line([dmy(l.date), String(l.receiptNo), l.mode.replace('_', ' '), l.installments, inr(l.charges).slice(4), inr(l.fine).slice(4), inr(l.amount).slice(4)]));
+    line(['Date', 'Receipt', 'Mode', 'Installments', 'Charges', 'Fine', 'Refundable', 'Total'], true);
+    d.lines.forEach((l) => line([dmy(l.date), String(l.receiptNo), l.mode.replace('_', ' '), l.installments, inr(l.charges).slice(4), inr(l.fine).slice(4), inr(l.refundable).slice(4), inr(l.amount).slice(4)]));
     doc.moveDown(0.5);
-    doc.font('Helvetica-Bold').fontSize(11).text(`Total fees paid: ${inr(d.total)}`);
-    doc.font('Helvetica-Oblique').fontSize(10).text(inWords(Math.round(Number(d.total) * 100)));
+    doc.font('Helvetica').fontSize(10).text(`Total received: ${inr(d.total)}`);
+    doc.text(`Less refundable deposits (caution / advance, returned on leaving): ${inr(d.refundableTotal)}`);
+    doc.font('Helvetica-Bold').fontSize(11).text(`Fees paid: ${inr(d.eligibleTotal)}`);
+    doc.font('Helvetica-Oblique').fontSize(10).text(inWords(Math.round(Number(d.eligibleTotal) * 100)));
     sign(doc, ['Date: ' + dmy(new Date()), 'Accountant', 'Principal']);
   });
 }

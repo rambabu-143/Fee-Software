@@ -1,6 +1,7 @@
 import { Button, Form, Input, InputNumber, Modal, Popconfirm, Space, Table, message } from 'antd'
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import { Gate } from '../session'
 import { useSelection } from '../selection'
 
 export type Installment = { id: number; number: number; label: string; dueDate: string; fineStartDate: string | null; finePerDay: string }
@@ -28,12 +29,12 @@ export default function Installments() {
 
   return (
     <>
-      <Button type="primary" style={{ marginBottom: 16 }} onClick={() => {
+      <Gate cap="installments.write"><Button type="primary" style={{ marginBottom: 16 }} onClick={() => {
         form.setFieldsValue({ number: rows.length + 1, label: '', dueDate: '', fineStartDate: '', finePerDay: 0 })
         setEditing({})
       }}>
         Add installment
-      </Button>
+      </Button></Gate>
       <Table rowKey="id" dataSource={rows} pagination={false} scroll={{ x: true }} columns={[
         { title: 'No.', dataIndex: 'number', width: 60 },
         { title: 'Label', dataIndex: 'label' },
@@ -44,13 +45,13 @@ export default function Installments() {
           title: '',
           render: (_, r) => (
             <Space>
-              <Button size="small" onClick={() => {
+              <Gate cap="installments.write" hide><Button size="small" onClick={() => {
                 form.setFieldsValue({ ...r, dueDate: day(r.dueDate), fineStartDate: day(r.fineStartDate), finePerDay: Number(r.finePerDay) })
                 setEditing(r)
-              }}>Edit</Button>
-              <Popconfirm title="Delete this installment?" onConfirm={() => run(api(`/installments/${r.id}`, { method: 'DELETE' }))}>
+              }}>Edit</Button></Gate>
+              <Gate cap="installments.write" hide><Popconfirm title="Delete this installment?" onConfirm={() => run(api(`/installments/${r.id}`, { method: 'DELETE' }))}>
                 <Button size="small" danger>Delete</Button>
-              </Popconfirm>
+              </Popconfirm></Gate>
             </Space>
           ),
         },

@@ -1,6 +1,7 @@
 import { Alert, Button, Checkbox, Divider, Empty, Popconfirm, Select, Space, Table, Typography, message } from 'antd'
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import { Gate } from '../session'
 import { useSelection } from '../selection'
 
 type Standard = { id: number; name: string; sections: { id: number; name: string }[] }
@@ -156,9 +157,9 @@ function UndoSection() {
       <Space wrap style={{ marginBottom: 16 }}>
         <Select placeholder="Year" style={{ width: 140 }} value={yearId} onChange={setYearId} options={years.map((y) => ({ value: y.id, label: y.label }))} />
         <Select placeholder="Class & section" style={{ width: 200 }} value={sectionId} onChange={setSectionId} options={sectionOptions} showSearch optionFilterProp="label" />
-        <Popconfirm title={`Remove ${picked.length} student(s) from this section and year?`} onConfirm={undo} disabled={!picked.length}>
+        <Gate cap="promotions.undo"><Popconfirm title={`Remove ${picked.length} student(s) from this section and year?`} onConfirm={undo} disabled={!picked.length}>
           <Button danger disabled={!picked.length}>Undo promotion for {picked.length}</Button>
-        </Popconfirm>
+        </Popconfirm></Gate>
       </Space>
       {!rows.length ? <Empty description="Pick the year and section the students were promoted into" /> : (
         <Table rowKey="id" size="small" dataSource={rows} pagination={false} rowSelection={{ selectedRowKeys: picked, onChange: (k) => setPicked(k as number[]) }}

@@ -39,10 +39,12 @@ import { AuditModule } from './audit/audit.module.js';
 import { SettingsModule } from './settings/settings.module.js';
 import { DefaultersModule } from './defaulters/defaulters.module.js';
 import { AuditInterceptor } from './audit/audit.interceptor.js';
+import { HealthModule } from './health/health.module.js';
 
 @Module({
   imports: [
     PrismaModule,
+    HealthModule,
     ArrearsModule,
     DepositsModule,
     VouchersModule,

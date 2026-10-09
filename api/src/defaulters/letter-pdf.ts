@@ -2,6 +2,9 @@ import PDFDocument from 'pdfkit';
 
 export type Letter = { parent: string; body: string; date: string; student: string; admissionNo: string };
 
+// A template that opens with its own greeting ("Dear Parent,") must not get a second one.
+export const hasGreeting = (body: string) => /^\s*dear\b/i.test(body);
+
 // One A4 page per student: letterhead, address block, subject, body, signature lines.
 export function defaulterLetterPdf(school: string, letters: Letter[]): Promise<Buffer> {
   const doc = new PDFDocument({ size: 'A4', margin: 56 });
@@ -16,7 +19,7 @@ export function defaulterLetterPdf(school: string, letters: Letter[]): Promise<B
     doc.text(`Date: ${l.date}`, { align: 'right' }).moveDown();
     doc.text('To,').text(l.parent).text(`Parent of ${l.student} (Adm. No. ${l.admissionNo})`).moveDown();
     doc.font('Helvetica-Bold').text('Subject: Reminder for payment of school fees').moveDown().font('Helvetica');
-    doc.text(`Dear ${l.parent},`).moveDown();
+    if (!hasGreeting(l.body)) doc.text(`Dear ${l.parent},`).moveDown();
     doc.text(l.body, { align: 'justify', lineGap: 3 }).moveDown(4);
     doc.text('Principal / Fee Office', { align: 'right' }).moveDown(2);
     doc.text('Signature of parent: ______________________      Date: ______________');

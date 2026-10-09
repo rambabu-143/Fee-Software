@@ -1,6 +1,7 @@
 import { Alert, Button, Checkbox, Form, Input, InputNumber, Select, Space, Table, Tabs, Tag, message } from 'antd'
 import { useEffect, useState } from 'react'
 import { api, openBlob, saveBlob } from '../api'
+import { Gate } from '../session'
 import { useSelection } from '../selection'
 import { inr } from '../bill'
 
@@ -9,8 +10,8 @@ type Doc = { id: number; type: string; serialNo: number; yearId: number; issuedO
 type Standard = { id: number; name: string; sections: { id: number; name: string }[] }
 type Cert = {
   year: string
-  lines: { date: string; receiptNo: number; mode: string; installments: string; charges: string; fine: string; amount: string }[]
-  total: string
+  lines: { date: string; receiptNo: number; mode: string; installments: string; charges: string; fine: string; refundable: string; amount: string }[]
+  total: string; refundableTotal: string; eligibleTotal: string
 }
 
 const fail = (e: unknown) => message.error((e as Error).message)
@@ -92,7 +93,7 @@ function TransferCertificate() {
             <Form.Item name="overrideDues" valuePropName="checked">
               <Checkbox>Issue even if fees are pending (override)</Checkbox>
             </Form.Item>
-            <Button type="primary" htmlType="submit" loading={busy}>Issue TC &amp; open PDF</Button>
+            <Gate cap="documents.tcIssue"><Button type="primary" htmlType="submit" loading={busy}>Issue TC &amp; open PDF</Button></Gate>
             <span style={{ marginLeft: 12, color: '#888' }}>A second TC for the same student is marked Duplicate and supersedes the first.</span>
           </Form>
           <Table rowKey="id" style={{ marginTop: 24 }} dataSource={docs} pagination={false} size="small" columns={[
@@ -142,10 +143,20 @@ function FeeCertificate() {
         <Table rowKey="receiptNo" dataSource={cert.lines} pagination={false} size="small" scroll={{ x: true }}
           locale={{ emptyText: 'No receipts in this year' }}
           summary={() => (
-            <Table.Summary.Row>
-              <Table.Summary.Cell index={0} colSpan={6}><b>Total paid, {cert.year}</b></Table.Summary.Cell>
-              <Table.Summary.Cell index={1} align="right"><b>{inr(cert.total)}</b></Table.Summary.Cell>
-            </Table.Summary.Row>
+            <>
+              <Table.Summary.Row>
+                <Table.Summary.Cell index={0} colSpan={7}>Total received, {cert.year}</Table.Summary.Cell>
+                <Table.Summary.Cell index={1} align="right">{inr(cert.total)}</Table.Summary.Cell>
+              </Table.Summary.Row>
+              <Table.Summary.Row>
+                <Table.Summary.Cell index={0} colSpan={7}>Less refundable deposits (not fees)</Table.Summary.Cell>
+                <Table.Summary.Cell index={1} align="right">{inr(cert.refundableTotal)}</Table.Summary.Cell>
+              </Table.Summary.Row>
+              <Table.Summary.Row>
+                <Table.Summary.Cell index={0} colSpan={7}><b>Fees paid</b></Table.Summary.Cell>
+                <Table.Summary.Cell index={1} align="right"><b>{inr(cert.eligibleTotal)}</b></Table.Summary.Cell>
+              </Table.Summary.Row>
+            </>
           )}
           columns={[
             { title: 'Date', dataIndex: 'date' },
@@ -154,6 +165,7 @@ function FeeCertificate() {
             { title: 'Installments', dataIndex: 'installments' },
             { title: 'Charges', dataIndex: 'charges', align: 'right', render: inr },
             { title: 'Fine', dataIndex: 'fine', align: 'right', render: inr },
+            { title: 'Refundable', dataIndex: 'refundable', align: 'right', render: inr },
             { title: 'Amount', dataIndex: 'amount', align: 'right', render: inr },
           ]} />
       )}

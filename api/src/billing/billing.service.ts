@@ -58,7 +58,7 @@ export class BillingService {
       ...[e.transport?.pickupStop?.slabId, e.transport?.dropStop?.slabId].filter((x): x is number => x != null),
     ]);
 
-    const [installments, structure, allocations, facilityStructure] = await Promise.all([
+    const [installments, structure, allocations, facilityStructure, bounced] = await Promise.all([
       db.installment.findMany({ where: { schoolId, yearId } }),
       db.feeStructure.findMany({
         where: { yearId, standardId: { in: [...new Set(enrollments.map((e) => e.section.standardId))] } },
@@ -71,16 +71,25 @@ export class BillingService {
       facilityIds.length
         ? db.facilityFeeStructure.findMany({ where: { yearId, facilityId: { in: facilityIds } } })
         : [],
+      // A bounce charge is owed from the moment the cheque bounces (a bounced receipt can't be cancelled or un-bounced).
+      db.payment.findMany({
+        where: { studentId: { in: studentIds }, yearId, clearStatus: 'BOUNCED', cancelledAt: null, bounceCharge: { gt: 0 } },
+        select: { studentId: true, receiptNo: true, bounceCharge: true },
+        orderBy: { receiptNo: 'asc' },
+      }),
     ]);
     const inst = installments.map((i) => ({ ...i, finePerDay: toPaise(i.finePerDay.toFixed(2)) }));
 
-    return enrollments.map((e) => ({
-      student: {
+    return enrollments.map((e) => {
+      const items = bounced
+        .filter((b) => b.studentId === e.studentId)
+        .map((b) => ({ receiptNo: b.receiptNo, amount: toPaise(b.bounceCharge!.toFixed(2)) }));
+      const student = {
         id: e.student.id, schoolId, admissionNo: e.student.admissionNo, name: e.student.name, active: e.student.active,
         className: `${e.section.standard.name} ${e.section.name}`, enrollmentId: e.id,
         standardId: e.section.standardId, standard: e.section.standard.name, sortOrder: e.section.standard.sortOrder,
-      },
-      ...calculateBill({
+      };
+      const calc = calculateBill({
         installments: inst,
         structure: structure
           .filter((s) => s.standardId === e.section.standardId)
@@ -95,9 +104,11 @@ export class BillingService {
           .map((a) => ({
             installmentId: a.installmentId, date: a.payment.date,
             charges: toPaise(a.charges.toFixed(2)), fine: toPaise(a.fine.toFixed(2)), arrear: toPaise(a.arrear.toFixed(2)),
+            bounce: toPaise(a.bounce.toFixed(2)),
           })),
         // A waiver only trims a positive arrear; a credit is left as is.
         arrear: e.arrearCarry ? netArrear(e.arrearCarry) : 0,
+        bounceCharges: items.reduce((n, i) => n + i.amount, 0),
         concessions: e.concessions.map((c) => ({
           feeHeadId: c.feeHeadId, reason: c.reason,
           percent: c.percent === null ? null : Number(c.percent), amount: c.amount === null ? null : toPaise(c.amount.toFixed(2)),
@@ -129,8 +140,9 @@ export class BillingService {
           }),
         ],
         asOf,
-      }),
-    }));
+      });
+      return { student, ...calc, bounce: { ...calc.bounce, items } };
+    });
   }
 
   // Paise -> "1234.50" strings for the API.
@@ -146,6 +158,10 @@ export class BillingService {
         charges: m(i.charges), fine: m(i.fine), paid: m(i.paid), due: m(i.due),
       })),
       arrear: { amount: m(bill.arrear.amount), paid: m(bill.arrear.paid), due: m(bill.arrear.due), excess: m(bill.arrear.excess) },
+      bounce: {
+        amount: m(bill.bounce.amount), paid: m(bill.bounce.paid), due: m(bill.bounce.due),
+        items: bill.bounce.items.map((i) => ({ receiptNo: i.receiptNo, amount: m(i.amount) })),
+      },
       totals: {
         charges: m(bill.totals.charges), fine: m(bill.totals.fine), paid: m(bill.totals.paid), due: m(bill.totals.due),
       },

@@ -105,7 +105,7 @@ export function ReconcileModal({ receipt, onClose, onDone }: { receipt: Receipt 
           <Input type="date" min={receipt?.date.slice(0, 10)} max={today()} />
         </Form.Item>
         {status === 'BOUNCED' && (
-          <Form.Item name="bounceCharge" label="Bounce charge (recorded on the receipt only)">
+          <Form.Item name="bounceCharge" label="Bounce charge (added to the student's bill)">
             <InputNumber min={0} precision={2} prefix="₹" style={{ width: 160 }} />
           </Form.Item>
         )}

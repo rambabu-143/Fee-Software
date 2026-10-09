@@ -6,16 +6,16 @@ import { IsArray, IsInt, IsNumber, Min, ValidateNested } from 'class-validator';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { assertSchool, CurrentUser, Roles, type AuthUser } from '../auth/auth.guard.js';
 
-class ItemDto {
+class FeeStructureItemDto {
   @IsInt() feeHeadId: number;
   @IsInt() installmentId: number;
   @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) amount: number;
 }
 
-class SaveStructureDto {
+class SaveFeeStructureDto {
   @IsInt() yearId: number;
   @IsInt() standardId: number;
-  @IsArray() @ValidateNested({ each: true }) @Type(() => ItemDto) items: ItemDto[];
+  @IsArray() @ValidateNested({ each: true }) @Type(() => FeeStructureItemDto) items: FeeStructureItemDto[];
 }
 
 // The fee grid for one class in one year: fee head x installment -> amount.
@@ -37,7 +37,7 @@ export class FeeStructureController {
   // Replaces the whole grid. Zero amounts are simply not stored.
   @Roles('ADMIN', 'ACCOUNTANT')
   @Put()
-  async save(@CurrentUser() u: AuthUser, @Body() dto: SaveStructureDto) {
+  async save(@CurrentUser() u: AuthUser, @Body() dto: SaveFeeStructureDto) {
     const { yearId, standardId, items } = dto;
     const { schoolId } = await this.prisma.standard.findUniqueOrThrow({ where: { id: standardId } });
     assertSchool(u, schoolId);

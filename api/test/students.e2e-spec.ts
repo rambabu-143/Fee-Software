@@ -8,6 +8,7 @@ import { PrismaService } from './../src/prisma/prisma.service.js';
 
 // Needs the seeded demo DB. Cleans up the students it creates.
 describe('students & bills (e2e)', () => {
+  const yearLabel = `2099-${Date.now() % 100000}`; // unique per run: a leftover year can't break the next run
   let app: INestApplication;
   let prisma: PrismaService;
   let auth: { Authorization: string };
@@ -36,12 +37,13 @@ describe('students & bills (e2e)', () => {
     await prisma.payment.deleteMany({ where: { studentId: { in: ids } } });
     await prisma.enrollment.deleteMany({ where: { studentId: { in: ids } } });
     // Rewind receipt numbers so the demo DB doesn't show gaps from test receipts.
-    for (const c of await prisma.receiptCounter.findMany()) {
+    // Only the schools these students belong to: other specs' private schools must keep their counters.
+    for (const c of await prisma.receiptCounter.findMany({ where: { schoolId: { in: [...new Set(s.map((x) => x.schoolId))] } } })) {
       const max = await prisma.payment.aggregate({ where: { schoolId: c.schoolId, yearId: c.yearId }, _max: { receiptNo: true } });
       await prisma.receiptCounter.update({ where: { schoolId_yearId: { schoolId: c.schoolId, yearId: c.yearId } }, data: { last: max._max.receiptNo ?? 0 } });
     }
     await prisma.student.deleteMany({ where: { id: { in: s.map((x) => x.id) } } });
-    await prisma.academicYear.deleteMany({ where: { label: '2099-00' } });
+    await prisma.academicYear.deleteMany({ where: { label: yearLabel } });
     await app.close();
   });
 
@@ -85,7 +87,7 @@ describe('students & bills (e2e)', () => {
   it('promotes into a new year only with a section', async () => {
     const c = await ctx('DEMO1');
     const st = await prisma.student.findFirstOrThrow({ where: { admissionNo } });
-    const next = await prisma.academicYear.create({ data: { label: '2099-00', startDate: new Date('2099-04-01'), endDate: new Date('2100-03-31') } });
+    const next = await prisma.academicYear.create({ data: { label: yearLabel, startDate: new Date('2099-04-01'), endDate: new Date('2100-03-31') } });
     await http().patch(`/api/students/${st.id}`).set(auth).send({ yearId: next.id }).expect(400);
     await http().patch(`/api/students/${st.id}`).set(auth).send({ yearId: next.id, sectionId: c.sectionId }).expect(200);
     expect(await prisma.enrollment.count({ where: { studentId: st.id } })).toBe(2);

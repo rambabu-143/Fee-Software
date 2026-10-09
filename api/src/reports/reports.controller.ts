@@ -39,7 +39,7 @@ export class ReportsController {
     const bills = await this.billing.buildMany(yearId, at, { schoolId, standardId, sectionId });
     return bills
       .map((b) => ({ ...b, installments: installmentId ? b.installments.filter((i) => i.installmentId === installmentId) : b.installments }))
-      // b.totals already folds in the carried arrear; a per-installment view leaves it out.
+      // b.totals already folds in the carried arrear and bounce charges; a per-installment view leaves it out.
       .map((b) => ({ ...b, totals: installmentId ? { charges: sumOf(b, 'charges'), fine: sumOf(b, 'fine'), paid: sumOf(b, 'paid'), due: sumOf(b, 'due') } : b.totals }))
       .filter((b) => !installmentId || b.installments.length > 0)
       .map((b) => ({
@@ -47,7 +47,7 @@ export class ReportsController {
         className: b.student.className, standardId: b.student.standardId, standard: b.student.standard, sortOrder: b.student.sortOrder,
         charges: fromPaise(b.totals.charges), fine: fromPaise(b.totals.fine), paid: fromPaise(b.totals.paid), due: fromPaise(b.totals.due),
         // Only installments already past their due date.
-        overdue: fromPaise(b.installments.filter((i) => i.dueDate <= at).reduce((s, i) => s + i.due, 0) + (installmentId ? 0 : b.arrear.due)),
+        overdue: fromPaise(b.installments.filter((i) => i.dueDate <= at).reduce((s, i) => s + i.due, 0) + (installmentId ? 0 : b.arrear.due + b.bounce.due)),
       }))
       .sort((a, b) => a.sortOrder - b.sortOrder || a.className.localeCompare(b.className) || a.admissionNo.localeCompare(b.admissionNo));
   }

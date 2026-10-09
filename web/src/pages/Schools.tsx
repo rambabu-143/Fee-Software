@@ -1,6 +1,7 @@
 import { Button, Form, Input, Modal, Select, Table, message } from 'antd'
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import { Gate } from '../session'
 
 type School = {
   id: number; code: string; name: string
@@ -44,9 +45,9 @@ export default function Schools() {
 
   return (
     <>
-      <Button type="primary" onClick={() => setOpen(true)} style={{ marginBottom: 16 }}>
+      <Gate cap="schools.create"><Button type="primary" onClick={() => setOpen(true)} style={{ marginBottom: 16 }}>
         Add school
-      </Button>
+      </Button></Gate>
       <Table rowKey="id" dataSource={rows} pagination={false} columns={[
         { title: 'Code', dataIndex: 'code' },
         { title: 'Name', dataIndex: 'name' },
@@ -56,10 +57,10 @@ export default function Schools() {
         { title: 'Address', dataIndex: 'address' },
         {
           title: '', render: (_, r) => (
-            <Button size="small" onClick={() => {
+            <Gate cap="schools.edit" hide><Button size="small" onClick={() => {
               editForm.setFieldsValue({ ...r, kind: r.kind ?? 'SENIOR' })
               setEditing(r)
-            }}>Edit letterhead</Button>
+            }}>Edit letterhead</Button></Gate>
           ),
         },
       ]} scroll={{ x: true }} />

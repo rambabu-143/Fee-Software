@@ -61,10 +61,10 @@ export function split(total: number, weights: number[]): number[] | null {
 
 export type Share = { studentId: number; bucket: string; paise: number; date: Date; mode: PaymentMode };
 
-// Receipts only record how much went to each installment, not to each fee head. For reports by head we split
-// every allocation across that installment's net head amounts pro-rata.
-// ponytail: pro-rata approximation, and it builds every bill in memory; store per-head allocations if the
-// accountants need exact head receipts, and materialise bills past a few thousand students.
+// Money received, by reporting bucket. Every installment payment carries an exact per-head split
+// (PaymentAllocationHead, rule in splitHeads, billing/bill.ts). Receipts from before that existed and not yet
+// backfilled (api/prisma/backfill-heads.ts) fall back to splitting the installment pro-rata over its net heads.
+// ponytail: it builds every bill in memory; materialise bills past a few thousand students.
 export async function paidShares(
   prisma: PrismaService,
   billing: BillingService,
@@ -81,7 +81,7 @@ export async function paidShares(
         ...(o.from || o.to ? { date: { ...(o.from && { gte: o.from }), ...(o.to && { lte: o.to }) } } : {}),
       },
     },
-    include: { payment: { select: { studentId: true, date: true, mode: true } } },
+    include: { payment: { select: { studentId: true, date: true, mode: true } }, heads: true },
   });
   const shares: Share[] = [];
   for (const a of allocations) {
@@ -89,7 +89,12 @@ export async function paidShares(
     const add = (bucket: string, paise: number) => paise && shares.push({ ...base, bucket, paise });
     add('Fine', toPaise(a.fine.toFixed(2)));
     add('Arrear', toPaise(a.arrear.toFixed(2)));
+    add('Bounce charge', toPaise(a.bounce.toFixed(2)));
     const charges = toPaise(a.charges.toFixed(2));
+    if (a.heads.length) {
+      for (const h of a.heads) add(isTransportLine(h.feeHeadId) ? 'Transport' : h.feeHeadId === 0 ? 'Unallocated' : h.name, toPaise(h.amount.toFixed(2)));
+      continue;
+    }
     const net = a.installmentId === null ? undefined : nets.get(`${base.studentId}:${a.installmentId}`);
     const parts = net && charges ? split(charges, [...net.values()]) : null;
     if (parts) [...net!.keys()].forEach((bucket, i) => add(bucket, parts[i]));

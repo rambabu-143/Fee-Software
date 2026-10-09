@@ -1,5 +1,6 @@
 import { Button, Checkbox, Divider, Form, Input, Modal, Popconfirm, Select, Space, Table, message } from 'antd'
 import { useEffect, useState } from 'react'
+import { Gate } from './session'
 import { api } from './api'
 
 type Guardian = {
@@ -65,15 +66,15 @@ export function GuardiansModal({ student, schoolId, yearId, onClose }: {
 
   return (
     <Modal title={`Guardians & subjects — ${student?.name ?? ''}`} open={!!student} onCancel={onClose} footer={null} width={760}>
-      <Button type="primary" style={{ marginBottom: 8 }} onClick={() => { form.resetFields(); form.setFieldsValue({ relation: 'FATHER', isStaff: false }); setEditing({}) }}>Add guardian</Button>
+      <Gate cap="guardians.write"><Button type="primary" style={{ marginBottom: 8 }} onClick={() => { form.resetFields(); form.setFieldsValue({ relation: 'FATHER', isStaff: false }); setEditing({}) }}>Add guardian</Button></Gate>
       <Table size="small" rowKey="id" dataSource={rows} pagination={false} scroll={{ x: true }} columns={[
         { title: 'Name', dataIndex: 'name' }, { title: 'Relation', dataIndex: 'relation' }, { title: 'Mobile', dataIndex: 'mobile' },
         { title: 'Occupation', render: (_, r) => occupations.find((o) => o.id === r.occupationId)?.name },
         { title: 'Staff', render: (_, r) => (r.isStaff ? `Yes${r.staffBranch ? ` (${r.staffBranch})` : ''}` : '') },
         { title: '', render: (_, r) => (
           <Space>
-            <Button size="small" onClick={() => { form.resetFields(); form.setFieldsValue(r); setEditing(r) }}>Edit</Button>
-            <Popconfirm title="Delete guardian?" onConfirm={() => remove(r.id)}><Button size="small" danger>Delete</Button></Popconfirm>
+            <Gate cap="guardians.write" hide><Button size="small" onClick={() => { form.resetFields(); form.setFieldsValue(r); setEditing(r) }}>Edit</Button></Gate>
+            <Gate cap="guardians.write" hide><Popconfirm title="Delete guardian?" onConfirm={() => remove(r.id)}><Button size="small" danger>Delete</Button></Popconfirm></Gate>
           </Space>
         ) },
       ]} />
@@ -81,7 +82,7 @@ export function GuardiansModal({ student, schoolId, yearId, onClose }: {
       <Space.Compact style={{ width: '100%' }}>
         <Select mode="multiple" style={{ flex: 1 }} placeholder="Language / additional subjects" value={chosen} onChange={setChosen} optionFilterProp="label"
           options={subjects.map((s) => ({ value: s.id, label: `${s.name} (${s.kind.toLowerCase()})` }))} />
-        <Button type="primary" onClick={saveSubjects}>Save subjects</Button>
+        <Gate cap="guardians.write"><Button type="primary" onClick={saveSubjects}>Save subjects</Button></Gate>
       </Space.Compact>
 
       <Modal title={editing?.id ? 'Edit guardian' : 'Add guardian'} open={!!editing} onCancel={() => setEditing(null)} onOk={() => form.submit()} destroyOnHidden>

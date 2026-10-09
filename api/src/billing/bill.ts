@@ -3,7 +3,7 @@
 export type HeadType = 'ADMISSION' | 'ANNUAL' | 'MONTHLY' | 'REFUNDABLE' | 'OPTIONAL';
 
 // installmentId null = the receipt's previous-year arrear portion.
-export type BillPayment = { installmentId: number | null; date: Date; charges: number; fine: number; arrear?: number };
+export type BillPayment = { installmentId: number | null; date: Date; charges: number; fine: number; arrear?: number; bounce?: number };
 
 export type BillInput = {
   installments: { id: number; number: number; label: string; dueDate: Date; fineStartDate: Date | null; finePerDay: number }[];
@@ -23,6 +23,8 @@ export type BillInput = {
   // Previous-year closing balance in paise, net of any waiver. Positive = owed (allocated first, no fine);
   // negative = credit, spread over the earliest installments' charges.
   arrear?: number;
+  // Bounce charges (paise) levied on bounced cheques of this enrollment's year; owed like an arrear, never fined.
+  bounceCharges?: number;
   asOf: Date;
 };
 
@@ -44,7 +46,7 @@ export type InstallmentBill = {
   paid: number;
   due: number;
 };
-export type Allocation = { installmentId: number | null; charges: number; fine: number; arrear?: number };
+export type Allocation = { installmentId: number | null; charges: number; fine: number; arrear?: number; bounce?: number };
 
 const DAY = 86_400_000;
 const utcDay = (d: Date) => Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
@@ -150,26 +152,33 @@ export function calculateBill(input: BillInput) {
     due: Math.max(0, owed - arrearPaid),
     excess: creditLeft + Math.max(0, arrearPaid - owed),
   };
+  const bounceOwed = Math.max(0, input.bounceCharges ?? 0);
+  const bouncePaid = input.payments.filter((p) => utcDay(p.date) <= today).reduce((s, p) => s + (p.bounce ?? 0), 0);
+  const bounce = { amount: bounceOwed, paid: bouncePaid, due: Math.max(0, bounceOwed - bouncePaid) };
   const total = (k: 'charges' | 'fine' | 'paid' | 'due') => installments.reduce((s, i) => s + i[k], 0);
   return {
     installments,
     arrear,
-    // Arrear folds into the totals so charges + fine - paid = due still holds.
+    bounce,
+    // Arrear and bounce charges fold into the totals so charges + fine - paid = due still holds.
     totals: {
-      charges: total('charges') + arrear.amount, fine: total('fine'),
-      paid: total('paid') + arrear.paid, due: total('due') + arrear.due,
+      charges: total('charges') + arrear.amount + bounce.amount, fine: total('fine'),
+      paid: total('paid') + arrear.paid + bounce.paid, due: total('due') + arrear.due + bounce.due,
     },
   };
 }
 
-// Arrear first, then oldest installment first; within one, fine before charges.
-export function allocate(installments: InstallmentBill[], amount: number, arrearDue = 0): Allocation[] {
+// Arrear first, then bounce charges, then oldest installment first; within one, fine before charges.
+export function allocate(installments: InstallmentBill[], amount: number, arrearDue = 0, bounceDue = 0): Allocation[] {
   let left = amount;
   const out: Allocation[] = [];
   const arrear = Math.min(left, arrearDue);
-  if (arrear > 0) {
-    left -= arrear;
-    out.push({ installmentId: null, charges: 0, fine: 0, arrear });
+  left -= arrear;
+  const bounce = Math.min(left, bounceDue);
+  left -= bounce;
+  // One installment-less row carries both, so a receipt has at most one.
+  if (arrear > 0 || bounce > 0) {
+    out.push({ installmentId: null, charges: 0, fine: 0, ...(arrear > 0 ? { arrear } : {}), ...(bounce > 0 ? { bounce } : {}) });
   }
   for (const i of [...installments].sort((a, b) => a.number - b.number)) {
     const fine = Math.min(left, i.fineDue);
@@ -179,4 +188,46 @@ export function allocate(installments: InstallmentBill[], amount: number, arrear
   }
   if (left > 0) throw new RangeError('Amount is more than the balance due');
   return out;
+}
+
+export type HeadShare = { feeHeadId: number; name: string; refundable: boolean; amount: number };
+
+// Exact split of one receipt's `charges` (paise) for ONE installment across that installment's fee heads.
+//
+// Rule (deterministic, a pure function of what was paid before): the installment's heads, net of concessions
+// (and of any previous-year credit, taken off the non-refundable heads first), are laid end to end: fee heads in
+// creation (id) order, then facility/transport lines, then REFUNDABLE heads LAST; money paid so far fills that
+// line from the left. The order never depends on how the database happens to return the fee structure. This receipt's share of
+// a head is how far the fill moved across it, so a partial payment never reaches a deposit before the fees,
+// and a head is "fully paid" exactly when the fill passes its end. Anything beyond the net total (fee structure
+// edited after payment, withdrawal) goes to the last head so the shares always add up to `charges`.
+export function splitHeads(lines: BillLine[], refundableIds: Set<number>, before: number, charges: number): HeadShare[] {
+  const nets = new Map<number, HeadShare>();
+  let credit = 0;
+  for (const l of lines) {
+    if (l.feeHeadId === 0) { credit += -l.amount; continue; }
+    const h = nets.get(l.feeHeadId);
+    if (h) h.amount += l.amount;
+    else nets.set(l.feeHeadId, { feeHeadId: l.feeHeadId, name: l.name, refundable: refundableIds.has(l.feeHeadId), amount: l.amount });
+  }
+  const rank = (h: HeadShare) => (h.refundable ? 2 : h.feeHeadId < 0 ? 1 : 0);
+  const ordered = [...nets.values()].sort((a, b) => rank(a) - rank(b) || Math.abs(a.feeHeadId) - Math.abs(b.feeHeadId));
+  for (const h of ordered) {
+    const take = Math.min(credit, Math.max(0, h.amount));
+    h.amount -= take;
+    credit -= take;
+  }
+  let start = 0;
+  const out = ordered.map((h) => {
+    const net = Math.max(0, h.amount);
+    const share = Math.max(0, Math.min(before + charges - start, net)) - Math.max(0, Math.min(before - start, net));
+    start += net;
+    return { ...h, amount: share };
+  });
+  const rest = charges - out.reduce((s, h) => s + h.amount, 0);
+  if (rest > 0) {
+    if (out.length) out[out.length - 1].amount += rest;
+    else out.push({ feeHeadId: 0, name: 'Unallocated', refundable: false, amount: rest });
+  }
+  return out.filter((h) => h.amount > 0);
 }

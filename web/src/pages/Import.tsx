@@ -8,6 +8,8 @@ import { downloadCsv, parseCsv } from '../csv'
 const FIELDS = [
   { key: 'admissionNo', req: true }, { key: 'name', req: true }, { key: 'standard', req: true }, { key: 'section', req: true },
   { key: 'rollNo' }, { key: 'dob' }, { key: 'phone' }, { key: 'email' }, { key: 'fatherName' }, { key: 'motherName' }, { key: 'isNewAdmission' },
+  { key: 'admissionDate' }, { key: 'gender' }, { key: 'religion' }, { key: 'category' }, { key: 'nationality' }, { key: 'address' },
+  { key: 'fatherEmail' }, { key: 'motherEmail' },
 ]
 const MAX_ROWS = 2000
 type Plan = { ok: boolean; errors: { row: number; msg: string }[]; rows?: number; willCreate?: number; willUpdate?: number; dryRun: boolean }
@@ -80,7 +82,7 @@ export default function Import() {
       </Typography.Paragraph>
       <Space wrap style={{ marginBottom: 12 }}>
         <input type="file" accept=".csv,text/csv" onChange={(e) => pick(e.target.files?.[0])} />
-        <Button onClick={() => downloadCsv('students-import-template', FIELDS.map((f) => f.key), [['A-1001', 'Asha Rao', 'Class 1', 'A', '1', '2018-05-21', '9876543210', 'asha@example.com', 'R. Rao', 'S. Rao', 'yes']])}>
+        <Button onClick={() => downloadCsv('students-import-template', FIELDS.map((f) => f.key), [['A-1001', 'Asha Rao', 'Class 1', 'A', '1', '2018-05-21', '9876543210', 'asha@example.com', 'R. Rao', 'S. Rao', 'yes', '2026-04-01', 'F', 'Hindu', 'General', 'Indian', '12 Main Rd, Hyderabad', 'rrao@example.com', 'srao@example.com']])}>
           Download template
         </Button>
       </Space>

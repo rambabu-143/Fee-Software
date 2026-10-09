@@ -16,9 +16,11 @@ async function bootstrap() {
   app.disable('x-powered-by');
   app.setGlobalPrefix('api');
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }));
-  // ponytail: docs open to anyone; gate or disable in prod if the API is public
-  SwaggerModule.setup('api/docs', app, SwaggerModule.createDocument(app,
-    new DocumentBuilder().setTitle('Fees API').addBearerAuth().build()));
+  // ponytail: docs are open to anyone; set DISABLE_DOCS=true when the API is public
+  if (process.env.DISABLE_DOCS !== 'true') {
+    SwaggerModule.setup('api/docs', app, SwaggerModule.createDocument(app,
+      new DocumentBuilder().setTitle('Fees API').addBearerAuth().build()));
+  }
   await app.listen(process.env.PORT ?? 3100);
 }
 await bootstrap();

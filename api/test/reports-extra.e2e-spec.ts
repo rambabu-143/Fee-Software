@@ -258,24 +258,24 @@ describe('reports-extra (e2e)', () => {
     expect(by['A4-005']).toMatchObject({ charges: '0.00', active: 'NO' });
   });
 
-  it('bifurcation: receipts split pro-rata into heads, exact to the paisa; cancelled and bounced receipts ignored', async () => {
+  it('bifurcation: receipts land exactly on heads (fees in id order, transport, deposits last); cancelled and bounced receipts ignored', async () => {
     const rows = (await get(`bifurcation?${q()}`)).body;
-    // s1 1000 over [Tuition 900, Annual 600, Computer 100, Transport 300] = 473.68 / 315.79 / 52.63 / 157.90; s3 1600 = 1000 / 600
+    // s1 1000 of [Tuition 900, Annual 600, Computer 100, Transport 300] = Tuition 900 + Annual 100; s3 1600 = Tuition 1000 + Annual 600
     expect(rows).toEqual([
-      { className: 'A4-1 A', Annual: '915.79', Computer: '52.63', Transport: '157.90', Tuition: '1473.68', total: '2600.00' },
-      // s2 500 over [Tuition 2000, Annual 750] = 363.64 / 136.36
-      { className: 'A4-2 A', Annual: '136.36', Tuition: '363.64', total: '500.00' },
+      { className: 'A4-1 A', Annual: '700.00', Tuition: '1900.00', total: '2600.00' },
+      // s2 500 of [Tuition 2000, Annual 750] = all Tuition
+      { className: 'A4-2 A', Tuition: '500.00', total: '500.00' },
     ]);
     const one = (await get(`bifurcation?${q('&groupBy=student&admissionNo=A4-001')}`)).body;
-    expect(one).toEqual([{ admissionNo: 'A4-001', name: 'Aarav', className: 'A4-1 A', Annual: '315.79', Computer: '52.63', Transport: '157.90', Tuition: '473.68', total: '1000.00' }]);
+    expect(one).toEqual([{ admissionNo: 'A4-001', name: 'Aarav', className: 'A4-1 A', Annual: '100.00', Tuition: '900.00', total: '1000.00' }]);
     expect((await get(`bifurcation?${q('&from=2999-01-01')}`)).body).toEqual([]);
     expect((await get(`bifurcation?${q('&groupBy=nope')}`)).status).toBe(400);
   });
 
   it('transport-bifurcation and routes', async () => {
-    expect((await get(`transport-bifurcation?${q()}`)).body).toEqual([{ className: 'A4-1 A', charged: '600.00', paid: '157.90', balance: '442.10' }]);
+    expect((await get(`transport-bifurcation?${q()}`)).body).toEqual([{ className: 'A4-1 A', charged: '600.00', paid: '0.00', balance: '600.00' }]);
     const byStudent = (await get(`transport-bifurcation?${q('&groupBy=student')}`)).body;
-    expect(byStudent).toEqual([{ admissionNo: 'A4-001', name: 'Aarav', className: 'A4-1 A', charged: '600.00', paid: '157.90', balance: '442.10' }]);
+    expect(byStudent).toEqual([{ admissionNo: 'A4-001', name: 'Aarav', className: 'A4-1 A', charged: '600.00', paid: '0.00', balance: '600.00' }]);
     // one pickup + one drop on a 600/yr slab: 300 + 300
     expect((await get(`routes?${q()}`)).body).toEqual([{ route: 'R1', slab: 'S1', sequence: 1, stop: 'Stop1', pickupTime: '07:30', dropTime: '15:30', pickups: 1, drops: 1, amount: '600.00' }]);
   });
@@ -296,11 +296,9 @@ describe('reports-extra (e2e)', () => {
     const mode = (await get(`payments-summary?${q()}`)).body;
     expect(mode).toEqual([{ mode: 'CASH', receipts: 2, amount: '2600.00' }, { mode: 'UPI', receipts: 1, amount: '500.00' }]);
     const head = (await get(`payments-summary?${q('&groupBy=head')}`)).body;
-    expect(head).toEqual([
-      { head: 'Annual', amount: '1052.15' }, { head: 'Computer', amount: '52.63' }, { head: 'Transport', amount: '157.90' }, { head: 'Tuition', amount: '1837.32' },
-    ]);
+    expect(head).toEqual([{ head: 'Annual', amount: '700.00' }, { head: 'Tuition', amount: '2400.00' }]);
     expect(head.reduce((s: number, h: { amount: string }) => s + Math.round(Number(h.amount) * 100), 0)).toBe(310000);
     const csv = (await get(`payments-summary?${q('&groupBy=head&format=csv')}`)).text.replace(/^\uFEFF/, '').split('\r\n');
-    expect(csv.slice(0, 2)).toEqual(['head,amount', 'Annual,1052.15']);
+    expect(csv.slice(0, 2)).toEqual(['head,amount', 'Annual,700.00']);
   });
 });

@@ -1,4 +1,4 @@
-import { ArgumentsHost, BadRequestException, Catch, ConflictException, Logger, NotFoundException } from '@nestjs/common';
+import { ArgumentsHost, BadRequestException, Catch, ConflictException, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { BaseExceptionFilter } from '@nestjs/core';
 import { Prisma } from '../generated/prisma/client.js';
 
@@ -19,6 +19,8 @@ export class PrismaErrorFilter extends BaseExceptionFilter {
       P2002: new ConflictException('A record with these values already exists'),
       P2003: new ConflictException('This record is in use by other records'),
       P2025: new NotFoundException(),
+      // Transaction could not start/finish in time: the server is overloaded, so tell clients to retry.
+      P2028: new ServiceUnavailableException('Server busy, please retry'),
     }[e.code];
     super.catch(mapped ?? e, host);
   }

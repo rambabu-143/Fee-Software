@@ -21,7 +21,7 @@ class CreateVoucherDto {
   @IsOptional() @IsString() remarks?: string;
 }
 
-class CancelDto {
+class CancelVoucherDto {
   @IsString() @MinLength(3) reason: string;
 }
 
@@ -66,11 +66,14 @@ export class VouchersController {
 
       // What the family can still be paid for this purpose, minus live vouchers already issued for it.
       let ceiling: number | null = null;
+      let held: { id: number; amount: Prisma.Decimal } | null = null; // HELD deposit these vouchers pay out
+      let left = 0;
       if (dto.kind === 'CAUTION_REFUND' || dto.kind === 'ADVANCE_REFUND') {
         // Deposit refund decisions live on Deposit; the voucher is the payout against it.
         const dep = await tx.deposit.findUnique({ where: { studentId_kind: { studentId: e.studentId, kind: dto.kind === 'CAUTION_REFUND' ? 'CAUTION' : 'ADVANCE' } } });
         if (!dep || (dep.status !== 'HELD' && dep.status !== 'REFUNDED')) throw new BadRequestException('No refundable deposit for this student');
         ceiling = toPaise((dep.status === 'REFUNDED' ? dep.refundAmount! : dep.amount).toFixed(2));
+        if (dep.status === 'HELD') held = dep;
       } else if (dto.kind === 'EXCESS_REFUND') {
         if (!e.withdrawal) throw new BadRequestException('Excess refunds need a recorded withdrawal');
         ceiling = toPaise(e.withdrawal.excessPaid.toFixed(2));
@@ -80,7 +83,7 @@ export class VouchersController {
           _sum: { amount: true },
           where: { enrollment: { studentId: e.studentId }, kind: dto.kind, cancelledAt: null, ...(dto.kind === 'EXCESS_REFUND' ? { enrollmentId: e.id } : {}) },
         });
-        const left = ceiling - toPaise((issued._sum.amount ?? 0).toString());
+        left = ceiling - toPaise((issued._sum.amount ?? 0).toString());
         if (amount > left) throw new BadRequestException(`Amount is more than the refundable balance (₹${fromPaise(Math.max(left, 0))})`);
       }
 
@@ -89,13 +92,24 @@ export class VouchersController {
         create: { schoolId: dto.schoolId, yearId: dto.yearId, last: 1 },
         update: { last: { increment: 1 } },
       });
-      return tx.voucher.create({
+      const v = await tx.voucher.create({
         data: {
           schoolId: dto.schoolId, yearId: dto.yearId, enrollmentId: e.id, voucherNo, date, kind: dto.kind, amount: fromPaise(amount),
           mode: dto.mode, reference: dto.mode === 'CASH' ? null : dto.reference, remarks: dto.remarks, createdBy: u.username,
         },
         include,
       });
+      // Paid out in full with no refund decision recorded: the deposit is refunded (a cancelled voucher undoes this).
+      if (held && amount === left) {
+        await tx.deposit.update({
+          where: { id: held.id },
+          data: {
+            status: 'REFUNDED', autoRefunded: true, refundedAt: date, refundAmount: held.amount, deduction: '0.00',
+            refundMode: dto.mode, refundRef: dto.mode === 'CASH' ? null : dto.reference,
+          },
+        });
+      }
+      return v;
     });
     return present(created);
   }
@@ -151,13 +165,31 @@ export class VouchersController {
   // Keeps its number; stops counting against the refundable balance.
   @Roles('ADMIN')
   @Post(':id/cancel')
-  async cancel(@CurrentUser() u: AuthUser, @Param('id', ParseIntPipe) id: number, @Body() dto: CancelDto) {
-    const v = await this.prisma.voucher.findUniqueOrThrow({ where: { id } });
+  async cancel(@CurrentUser() u: AuthUser, @Param('id', ParseIntPipe) id: number, @Body() dto: CancelVoucherDto) {
+    const v = await this.prisma.voucher.findUniqueOrThrow({ where: { id }, include });
     assertSchool(u, v.schoolId);
-    const { count } = await this.prisma.voucher.updateMany({
-      where: { id, cancelledAt: null }, data: { cancelledAt: new Date(), cancelReason: dto.reason },
+    return this.prisma.$transaction(async (tx) => {
+      // Same student lock as create(), so a cancel can't interleave with a payout against the same deposit.
+      await tx.$queryRaw`SELECT id FROM "Student" WHERE id = ${v.enrollment.studentId} FOR UPDATE`;
+      const { count } = await tx.voucher.updateMany({
+        where: { id, cancelledAt: null }, data: { cancelledAt: new Date(), cancelReason: dto.reason },
+      });
+      if (!count) throw new BadRequestException('Voucher is already cancelled');
+      // A deposit that these vouchers had refunded in full goes back to HELD once they no longer cover it.
+      const kind = v.kind === 'CAUTION_REFUND' ? 'CAUTION' : v.kind === 'ADVANCE_REFUND' ? 'ADVANCE' : null;
+      const dep = kind && await tx.deposit.findUnique({ where: { studentId_kind: { studentId: v.enrollment.studentId, kind } } });
+      if (dep && dep.autoRefunded && dep.status === 'REFUNDED') {
+        const live = await tx.voucher.aggregate({
+          _sum: { amount: true }, where: { enrollment: { studentId: dep.studentId }, kind: v.kind, cancelledAt: null },
+        });
+        if (toPaise((live._sum.amount ?? 0).toString()) < toPaise(dep.amount.toFixed(2))) {
+          await tx.deposit.update({
+            where: { id: dep.id },
+            data: { status: 'HELD', autoRefunded: false, refundedAt: null, refundAmount: null, deduction: null, refundMode: null, refundRef: null },
+          });
+        }
+      }
+      return present(await tx.voucher.findUniqueOrThrow({ where: { id }, include }));
     });
-    if (!count) throw new BadRequestException('Voucher is already cancelled');
-    return present(await this.prisma.voucher.findUniqueOrThrow({ where: { id }, include }));
   }
 }

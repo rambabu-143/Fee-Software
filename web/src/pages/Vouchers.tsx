@@ -1,6 +1,7 @@
 import { Button, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, message } from 'antd'
 import { useEffect, useState } from 'react'
 import { api, openPdf } from '../api'
+import { Gate } from '../session'
 import { useSelection } from '../selection'
 import { inr } from '../bill'
 import { downloadCsv } from '../csv'
@@ -93,7 +94,7 @@ export default function Vouchers() {
         <Select allowClear placeholder="Kind" style={{ width: 160 }} options={kinds} onChange={(k) => setF({ ...f, kind: k })} />
         From <Input type="date" onChange={(e) => setF({ ...f, from: e.target.value })} />
         To <Input type="date" onChange={(e) => setF({ ...f, to: e.target.value })} />
-        <Button type="primary" onClick={() => { form.resetFields(); form.setFieldsValue({ mode: 'CASH', date: today() }); setCreating(true) }}>New voucher</Button>
+        <Gate cap="vouchers.create"><Button type="primary" onClick={() => { form.resetFields(); form.setFieldsValue({ mode: 'CASH', date: today() }); setCreating(true) }}>New voucher</Button></Gate>
         <Button onClick={() => openPdf(`/vouchers?${query()}&pdf=1`).catch((e) => message.error(e.message))}>Register PDF</Button>
         <Button onClick={() => downloadCsv('vouchers', ['No', 'Date', 'Adm no', 'Student', 'Class', 'Kind', 'Mode', 'Amount', 'Cancelled'],
           rows.map((r) => [r.voucherNo, r.date.slice(0, 10), r.student.admissionNo, r.student.name, r.className, r.kind, r.mode, r.amount, r.cancelledAt ? 'yes' : '']))}>CSV</Button>
@@ -113,7 +114,7 @@ export default function Vouchers() {
             <Space>
               <Button size="small" onClick={() => openPdf(`/vouchers/${r.id}/pdf`).catch((e) => message.error(e.message))}>PDF</Button>
               {/* ponytail: shown to all; the API allows only ADMIN and returns 403 otherwise. */}
-              {!r.cancelledAt && <Button size="small" danger onClick={() => { setReason(''); setCancelling(r) }}>Cancel</Button>}
+              {!r.cancelledAt && <Gate cap="vouchers.cancel" hide><Button size="small" danger onClick={() => { setReason(''); setCancelling(r) }}>Cancel</Button></Gate>}
             </Space>
           ),
         },

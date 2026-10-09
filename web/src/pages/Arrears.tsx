@@ -1,6 +1,7 @@
 import { Alert, Button, Card, Descriptions, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, message } from 'antd'
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import { Gate } from '../session'
 import { useSelection } from '../selection'
 import { inr } from '../bill'
 import { downloadCsv } from '../csv'
@@ -9,7 +10,17 @@ type Row = {
   enrollmentId: number; admissionNo: string; name: string; className: string; fromYear: string; amount: string; waivedAmount: string
   waiveReason: string | null; source: string; net: string; paid: string; due: string; credit: string
 }
-type CarryResult = { carried: number; credits: number; zero: number; skippedWithdrawn: number; skippedNotEnrolled: number; skippedExisting: number }
+type Outcome = 'CARRIED' | 'SKIPPED_EXISTING' | 'SKIPPED_WITHDRAWN' | 'SKIPPED_NOT_ENROLLED_NEXT_YEAR' | 'SKIPPED_ZERO'
+type OutcomeRow = { studentId: number; admissionNo: string; name: string; className: string; outcome: Outcome; amount: string | null }
+type CarryResult = {
+  dryRun: boolean; carried: number; credits: number; zero: number; skippedWithdrawn: number; skippedNotEnrolled: number; skippedExisting: number
+  leftBehindDue: string; rows: OutcomeRow[]
+}
+type LeftBehind = { studentId: number; admissionNo: string; name: string; className: string; due: string }
+const OUTCOME: Record<Outcome, [string, string]> = {
+  CARRIED: ['green', 'Carried'], SKIPPED_EXISTING: ['default', 'Already carried'], SKIPPED_WITHDRAWN: ['default', 'Withdrawn'],
+  SKIPPED_NOT_ENROLLED_NEXT_YEAR: ['red', 'Not enrolled this year — NOT carried'], SKIPPED_ZERO: ['default', 'Nothing owed'],
+}
 
 // Previous year's closing balance carried into the selected year's bill.
 export default function Arrears() {
@@ -18,6 +29,8 @@ export default function Arrears() {
   const [fromYearId, setFromYearId] = useState<number>()
   const [result, setResult] = useState<CarryResult | null>(null)
   const [carrying, setCarrying] = useState(false)
+  const [left, setLeft] = useState<LeftBehind[]>([])
+  const [previewed, setPreviewed] = useState(false)
   const [editing, setEditing] = useState<Row | null>(null)
   const [form] = Form.useForm()
 
@@ -27,6 +40,19 @@ export default function Arrears() {
     load()
     setResult(null)
   }, [schoolId, yearId])
+  useEffect(() => {
+    setPreviewed(false)
+    setResult(null)
+  }, [fromYearId])
+
+  // Students enrolled last year, owing money, but not enrolled in the selected year: their balance is NOT carried.
+  const loadLeft = () =>
+    schoolId && yearId && fromYearId
+      ? api<LeftBehind[]>(`/arrears/unpromoted?schoolId=${schoolId}&fromYearId=${fromYearId}&toYearId=${yearId}`).then(setLeft).catch(() => setLeft([]))
+      : setLeft([])
+  useEffect(() => {
+    loadLeft()
+  }, [schoolId, yearId, fromYearId])
 
   // Default "from" = the latest year that starts before the selected one.
   useEffect(() => {
@@ -35,11 +61,16 @@ export default function Arrears() {
     setFromYearId(prev?.id)
   }, [years, yearId])
 
-  async function carry() {
+  async function carry(dryRun: boolean) {
     setCarrying(true)
     try {
-      setResult(await api<CarryResult>('/arrears/carry', { method: 'POST', body: JSON.stringify({ schoolId, fromYearId, toYearId: yearId }) }))
-      await load()
+      setResult(await api<CarryResult>('/arrears/carry', { method: 'POST', body: JSON.stringify({ schoolId, fromYearId, toYearId: yearId, dryRun }) }))
+      if (dryRun) setPreviewed(true)
+      else {
+        setPreviewed(false)
+        await load()
+        await loadLeft()
+      }
     } catch (e) {
       message.error((e as Error).message)
     } finally {
@@ -71,14 +102,39 @@ export default function Arrears() {
           From year
           <Select style={{ width: 140 }} value={fromYearId} onChange={setFromYearId} placeholder="Year"
             options={years.filter((y) => y.id !== yearId).map((y) => ({ value: y.id, label: y.label }))} />
-          <Button type="primary" loading={carrying} disabled={!fromYearId || !yearId} onClick={carry}>Carry forward</Button>
-          <span style={{ color: '#888' }}>Safe to repeat: students who already have an arrear row are left alone.</span>
+          <Gate cap="arrears.carry"><Button loading={carrying} disabled={!fromYearId || !yearId} onClick={() => carry(true)}>Preview</Button></Gate>
+          <Gate cap="arrears.carry"><Button type="primary" loading={carrying} disabled={!previewed} onClick={() => carry(false)}>Carry forward</Button></Gate>
+          <span style={{ color: '#888' }}>Preview first, nothing is saved. Safe to repeat: students who already have an arrear row are left alone.</span>
         </Space>
         {result && (
-          <Alert style={{ marginTop: 12 }} type="success" showIcon message={`${result.carried} carried, ${result.credits} credits, ${result.zero} nil`}
-            description={`Skipped: ${result.skippedExisting} already carried · ${result.skippedWithdrawn} withdrawn · ${result.skippedNotEnrolled} not enrolled last year`} />
+          <>
+            <Alert style={{ marginTop: 12 }} type={result.skippedNotEnrolled ? 'warning' : 'success'} showIcon
+              message={`${result.dryRun ? 'Preview: ' : ''}${result.carried} carried, ${result.credits} credits, ${result.zero} nil`}
+              description={`Skipped: ${result.skippedExisting} already carried · ${result.skippedWithdrawn} withdrawn · ${result.skippedNotEnrolled} not enrolled this year (${inr(result.leftBehindDue)} NOT carried)`} />
+            <Table style={{ marginTop: 12 }} size="small" rowKey="studentId" dataSource={result.rows} pagination={{ pageSize: 10 }} scroll={{ x: true }}
+              onRow={(r) => ({ style: r.outcome === 'SKIPPED_NOT_ENROLLED_NEXT_YEAR' ? { background: '#fff1f0' } : undefined })} columns={[
+                { title: 'Adm. no.', dataIndex: 'admissionNo' },
+                { title: 'Student', dataIndex: 'name' },
+                { title: 'Class', dataIndex: 'className' },
+                { title: 'Outcome', dataIndex: 'outcome', render: (v: Outcome) => <Tag color={OUTCOME[v][0]}>{OUTCOME[v][1]}</Tag> },
+                { title: 'Amount', dataIndex: 'amount', align: 'right', render: (v: string | null) => (v === null ? '' : inr(v)) },
+              ]} />
+          </>
         )}
       </Card>
+
+      {left.length > 0 && (
+        <Card size="small" style={{ borderColor: '#ff4d4f' }} title={`Not enrolled in ${yearName ?? 'this year'}: ${left.length} students, ${inr(String(left.reduce((n, r) => n + Number(r.due), 0)))} not carried`}
+          extra={<Button size="small" onClick={() => downloadCsv('not-carried', ['Adm no', 'Name', 'Class', 'Closing balance'], left.map((r) => [r.admissionNo, r.name, r.className, r.due]))}>CSV</Button>}>
+          <div style={{ color: '#888', marginBottom: 8 }}>Enrol them in {yearName} (or record a withdrawal), then run Carry forward again to pick them up.</div>
+          <Table size="small" rowKey="studentId" dataSource={left} pagination={{ pageSize: 10 }} scroll={{ x: true }} columns={[
+            { title: 'Adm. no.', dataIndex: 'admissionNo' },
+            { title: 'Student', dataIndex: 'name' },
+            { title: 'Class', dataIndex: 'className' },
+            { title: 'Closing balance', dataIndex: 'due', align: 'right', render: (v: string) => <b style={{ color: '#cf1322' }}>{inr(v)}</b> },
+          ]} />
+        </Card>
+      )}
 
       <Space wrap>
         <span>{rows.length} students · outstanding arrear <b>{inr(String(total))}</b></span>
@@ -97,7 +153,7 @@ export default function Arrears() {
         { title: 'Due', dataIndex: 'due', align: 'right', render: (v: string) => <b>{inr(v)}</b> },
         { title: 'Source', dataIndex: 'source', render: (v: string) => <Tag>{v}</Tag> },
         // ponytail: shown to all; the API allows only ADMIN and returns 403 otherwise.
-        { title: '', render: (_, r) => <Button size="small" onClick={() => open(r)}>Edit / waive</Button> },
+        { title: '', render: (_, r) => <Gate cap="arrears.carry" hide><Button size="small" onClick={() => open(r)}>Edit / waive</Button></Gate> },
       ]} />
 
       <Modal title={editing && `Arrear · ${editing.name} (${editing.admissionNo})`} open={!!editing} onCancel={() => setEditing(null)} onOk={() => form.submit()} okText="Save">

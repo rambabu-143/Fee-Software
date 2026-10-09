@@ -1,6 +1,7 @@
 import { Button, Card, Form, Input, Modal, Select, Space, Switch, Table, Tabs, Tag, message } from 'antd'
 import { useEffect, useState } from 'react'
 import { api, openPdf } from '../api'
+import { Gate, useCan } from '../session'
 import { useSelection } from '../selection'
 import { inr } from '../bill'
 import { modes, type Receipt } from '../receipt'
@@ -43,11 +44,11 @@ function BanksTab() {
   }
   return (
     <>
-      <Button type="primary" onClick={() => open('new')} style={{ marginBottom: 16 }}>Add bank</Button>
+      <Gate cap="banks.write"><Button type="primary" onClick={() => open('new')} style={{ marginBottom: 16 }}>Add bank</Button></Gate>
       <Table rowKey="id" dataSource={rows} pagination={false} scroll={{ x: true }} columns={[
         { title: 'Bank', dataIndex: 'name' }, { title: 'Account no.', dataIndex: 'accountNo' }, { title: 'IFSC', dataIndex: 'ifsc' },
         { title: 'Status', dataIndex: 'active', render: (a: boolean) => (a ? <Tag color="green">Active</Tag> : <Tag>Inactive</Tag>) },
-        { title: '', render: (_, b) => <Button size="small" onClick={() => open(b)}>Edit</Button> },
+        { title: '', render: (_, b) => <Gate cap="banks.write" hide><Button size="small" onClick={() => open(b)}>Edit</Button></Gate> },
       ]} />
       <Modal title={editing === 'new' ? 'Add bank' : 'Edit bank'} open={!!editing} onCancel={() => setEditing(null)} onOk={() => form.submit()}>
         <Form form={form} layout="vertical" onFinish={save}>
@@ -161,12 +162,14 @@ function FinesTab() {
 }
 
 export default function Banking() {
+  // GET /banks and the pending-receipt list are ADMIN/ACCOUNTANT only; the two reports are open to all.
+  const staff = useCan()('banks.read')
   return (
     <Tabs items={[
-      { key: 'r', label: 'Reconcile', children: <ReconcileTab /> },
+      ...(staff ? [{ key: 'r', label: 'Reconcile', children: <ReconcileTab /> }] : []),
       { key: 'rep', label: 'Banking report', children: <ReportTab /> },
       { key: 'f', label: 'Fines', children: <FinesTab /> },
-      { key: 'b', label: 'Banks', children: <BanksTab /> },
+      ...(staff ? [{ key: 'b', label: 'Banks', children: <BanksTab /> }] : []),
     ]} />
   )
 }

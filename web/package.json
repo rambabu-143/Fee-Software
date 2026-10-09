@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check:perms": "node scripts/check-permissions.mjs"
   },
   "dependencies": {
     "@types/qrcode": "^1.5.6",

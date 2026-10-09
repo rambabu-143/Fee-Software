@@ -1,6 +1,7 @@
 import {
-  BadRequestException, Body, Controller, Get, Header, Param, ParseDatePipe, ParseIntPipe, Patch, Post, Query, StreamableFile,
+  BadRequestException, Body, Controller, Get, Header, Param, ParseDatePipe, ParseIntPipe, Patch, Post, Query, Res, StreamableFile,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { OmitType, PartialType } from '@nestjs/mapped-types';
 import {
   IsArray, IsBoolean, IsDateString, IsEmail, IsEnum, IsInt, IsOptional, IsString, MinLength,
@@ -10,6 +11,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { assertSchool, CurrentUser, Roles, type AuthUser } from '../auth/auth.guard.js';
 import { BillingService } from '../billing/billing.service.js';
 import { billPdf } from '../billing/pdf.js';
+import { page } from '../common/paging.js';
 
 class StudentDto {
   @IsInt() schoolId: number;
@@ -59,6 +61,16 @@ export class StudentsController {
     private billing: BillingService,
   ) {}
 
+  // Distinct concession categories already used in this school, for the concessions form's suggestions.
+  @Get('concession-categories')
+  async concessionCategories(@CurrentUser() u: AuthUser, @Query('schoolId', ParseIntPipe) schoolId: number) {
+    assertSchool(u, schoolId);
+    const rows = await this.prisma.concession.findMany({
+      where: { category: { not: null }, enrollment: { student: { schoolId } } }, distinct: ['category'], select: { category: true }, orderBy: { category: 'asc' },
+    });
+    return rows.map((r) => r.category as string);
+  }
+
   @Get()
   async list(
     @CurrentUser() u: AuthUser,
@@ -66,22 +78,26 @@ export class StudentsController {
     @Query('yearId', ParseIntPipe) yearId: number,
     @Query('standardId', new ParseIntPipe({ optional: true })) standardId?: number,
     @Query('q') q?: string,
+    @Query('limit', new ParseIntPipe({ optional: true })) limit?: number,
+    @Query('offset', new ParseIntPipe({ optional: true })) offset?: number,
+    @Res({ passthrough: true }) res?: Response,
   ) {
     assertSchool(u, schoolId);
-    const rows = await this.prisma.student.findMany({
-      where: {
-        schoolId,
-        enrollments: {
-          some: { yearId, ...(standardId ? { section: { standardId } } : {}) },
-        },
-        ...(q
-          ? { OR: [{ name: { contains: q, mode: 'insensitive' } }, { admissionNo: { contains: q, mode: 'insensitive' } }] }
-          : {}),
+    const where = {
+      schoolId,
+      enrollments: {
+        some: { yearId, ...(standardId ? { section: { standardId } } : {}) },
       },
-      include: enrollmentInclude(yearId),
-      orderBy: { admissionNo: 'asc' },
-      take: 5000, // ponytail: hard cap instead of pagination (500 truncated a 600-student school); paginate past 5000
-    });
+      ...(q
+        ? { OR: [{ name: { contains: q, mode: 'insensitive' as const } }, { admissionNo: { contains: q, mode: 'insensitive' as const } }] }
+        : {}),
+    };
+    // No limit = everything up to 5000, as before. With limit/offset the page is returned and X-Total-Count has the full match count.
+    const [rows, total] = await Promise.all([
+      this.prisma.student.findMany({ where, include: enrollmentInclude(yearId), orderBy: { admissionNo: 'asc' }, ...page(limit, offset, 5000) }),
+      this.prisma.student.count({ where }),
+    ]);
+    res?.setHeader('X-Total-Count', total);
     return rows.map(({ enrollments: [e], ...s }) => ({
       ...s,
       enrollment: {

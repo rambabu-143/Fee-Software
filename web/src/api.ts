@@ -87,3 +87,15 @@ export async function postPdf(path: string, body: unknown) {
   window.open(URL.createObjectURL(await res.blob()))
   return { letters: Number(res.headers.get('X-Letters')), skipped: Number(res.headers.get('X-Skipped')) }
 }
+
+// GET for paginated lists: the body plus the X-Total-Count header (0 if the endpoint doesn't send it).
+export async function apiWithTotal<T>(path: string) {
+  const res = await fetch(`/api${path}`, { headers: { Authorization: `Bearer ${auth.token}` } })
+  if (res.status === 401) {
+    auth.set(null)
+    location.href = '/login'
+  }
+  const body = await res.json().catch(() => null)
+  if (!res.ok) throw new Error(Array.isArray(body?.message) ? body.message.join(', ') : (body?.message ?? res.statusText))
+  return { data: body as T, total: Number(res.headers.get('X-Total-Count') ?? 0) }
+}

@@ -11,8 +11,9 @@ export const fmtDate = (d: Date) => d.toISOString().slice(0, 10).split('-').reve
 export const render = (tpl: string, v: Record<string, string>) => tpl.replace(/\{(\w+)\}/g, (m, k: string) => (k in v ? v[k] : m));
 
 // Only installments already past their due date count (same rule as /reports/dues).
-// A carried previous-year arrear is overdue by definition.
-export const overduePaise = (b: Bill, at: Date) => b.installments.filter((i) => i.dueDate <= at).reduce((s, i) => s + i.due, 0) + b.arrear.due;
+// A carried previous-year arrear and any bounce charge are overdue by definition.
+export const overduePaise = (b: Bill, at: Date) =>
+  b.installments.filter((i) => i.dueDate <= at).reduce((s, i) => s + i.due, 0) + b.arrear.due + b.bounce.due;
 
 // Students of one school/year for a messaging batch, with the placeholder values for each.
 // ponytail: builds the whole school's bills (like /reports/dues); fine to a few thousand students.

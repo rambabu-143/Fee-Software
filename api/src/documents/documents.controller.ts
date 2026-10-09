@@ -34,7 +34,7 @@ class TcDto {
   @IsOptional() @IsBoolean() overrideDues?: boolean;
 }
 
-class SendDto {
+class SendAdmissionCertDto {
   @IsInt() yearId: number;
   @IsOptional() @IsIn(['father', 'mother', 'both']) to?: 'father' | 'mother' | 'both';
 }
@@ -145,8 +145,10 @@ export class DocumentsController {
 
   // ---- Fee-paid certificate (income tax) ----------------------------------
 
-  // Built from the student's non-cancelled receipts, so the lines always add up to the total.
-  // ponytail: receipts are split by installment, not fee head; refundable deposits can't be excluded yet.
+  // Built from the student's non-cancelled receipts, so the lines always add up to the total. Refundable deposits
+  // (caution / advance) are not fees: each receipt's deposit portion comes from its exact per-head split and is
+  // deducted, so `eligibleTotal` = total - refundableTotal. Receipts from before per-head allocation (not yet
+  // backfilled) show 0 refundable.
   @Roles('ADMIN', 'ACCOUNTANT')
   @Get('students/:id/fee-certificate')
   async feeCert(
@@ -157,23 +159,26 @@ export class DocumentsController {
     const pays = await this.prisma.payment.findMany({
       where: { studentId: id, yearId, cancelledAt: null, clearStatus: { not: 'BOUNCED' } },
       orderBy: [{ date: 'asc' }, { receiptNo: 'asc' }],
-      include: { allocations: { include: { installment: { select: { label: true, number: true } } } } },
+      include: { allocations: { include: { installment: { select: { label: true, number: true } }, heads: { select: { refundable: true, amount: true } } } } },
     });
-    let total = 0;
+    let total = 0, refundableTotal = 0;
     const lines = pays.map((p) => {
       total += toPaise(p.amount.toFixed(2));
+      const refundable = p.allocations.reduce((n, a) => n + a.heads.filter((h) => h.refundable).reduce((m, h) => m + toPaise(h.amount.toFixed(2)), 0), 0);
+      refundableTotal += refundable;
       return {
+        refundable,
         date: p.date.toISOString().slice(0, 10), receiptNo: p.receiptNo, mode: p.mode,
         installments: p.allocations.filter((a) => a.installment).sort((a, b) => a.installment!.number - b.installment!.number).map((a) => a.installment!.label).join(', ') || '-',
-        charges: p.allocations.reduce((s, a) => s + toPaise(a.charges.toFixed(2)) + toPaise(a.arrear.toFixed(2)), 0),
+        charges: p.allocations.reduce((s, a) => s + toPaise(a.charges.toFixed(2)) + toPaise(a.arrear.toFixed(2)) + toPaise(a.bounce.toFixed(2)), 0),
         fine: p.allocations.reduce((s, a) => s + toPaise(a.fine.toFixed(2)), 0), amount: toPaise(p.amount.toFixed(2)),
       };
     });
     const data = {
       school: this.head(e.section.standard.school), year: e.year.label,
       student: { admissionNo: e.student.admissionNo, name: e.student.name, fatherName: e.student.fatherName, motherName: e.student.motherName, className: `${e.section.standard.name} ${e.section.name}` },
-      lines: lines.map((l) => ({ ...l, charges: fromPaise(l.charges), fine: fromPaise(l.fine), amount: fromPaise(l.amount) })),
-      total: fromPaise(total),
+      lines: lines.map((l) => ({ ...l, charges: fromPaise(l.charges), fine: fromPaise(l.fine), refundable: fromPaise(l.refundable), amount: fromPaise(l.amount) })),
+      total: fromPaise(total), refundableTotal: fromPaise(refundableTotal), eligibleTotal: fromPaise(total - refundableTotal),
     };
     if (json) return data;
     return this.file(res, await feeCertPdf(data), `fee-certificate-${e.student.admissionNo}.pdf`);
@@ -192,7 +197,7 @@ export class DocumentsController {
   // swap the stub for nodemailer when SMTP_* credentials exist.
   @Roles('ADMIN', 'ACCOUNTANT')
   @Post('students/:id/admission-certificate/send')
-  async sendAdmissionCert(@CurrentUser() u: AuthUser, @Param('id', ParseIntPipe) id: number, @Body() dto: SendDto) {
+  async sendAdmissionCert(@CurrentUser() u: AuthUser, @Param('id', ParseIntPipe) id: number, @Body() dto: SendAdmissionCertDto) {
     const e = await this.enrolled(u, id, dto.yearId);
     const to = dto.to ?? 'both';
     const wanted = [to !== 'mother' && e.student.fatherEmail, to !== 'father' && e.student.motherEmail];

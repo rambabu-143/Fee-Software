@@ -2,6 +2,7 @@ import { Button, Empty, InputNumber, Select, Space, Table, Typography, message }
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { useSelection } from '../selection'
+import { Gate, useCan } from '../session'
 import type { Installment } from './Installments'
 
 type FeeHead = { id: number; name: string; type: string }
@@ -12,6 +13,7 @@ const money = (n: number) => n.toLocaleString('en-IN', { minimumFractionDigits: 
 // Grid for one class: rows = fee heads, columns = installments.
 export default function FeeStructure() {
   const { schoolId, yearId } = useSelection()
+  const can = useCan()
   const [standards, setStandards] = useState<{ id: number; name: string }[]>([])
   const [standardId, setStandardId] = useState<number>()
   const [heads, setHeads] = useState<FeeHead[]>([])
@@ -75,7 +77,7 @@ export default function FeeStructure() {
         <span>Class:</span>
         <Select style={{ minWidth: 160 }} value={standardId} onChange={setStandardId}
           options={standards.map((s) => ({ value: s.id, label: s.name }))} />
-        <Button type="primary" onClick={save} disabled={!dirty}>Save</Button>
+        <Gate cap="feeStructure.write"><Button type="primary" onClick={save} disabled={!dirty}>Save</Button></Gate>
       </Space>
       <Table rowKey="id" dataSource={heads} pagination={false} scroll={{ x: true }} bordered
         columns={[
@@ -84,7 +86,7 @@ export default function FeeStructure() {
             title: i.label,
             key: i.id,
             render: (_: unknown, h: FeeHead) => (
-              <InputNumber min={0} precision={2} style={{ width: 120 }} value={amt(h.id, i.id) || null}
+              <InputNumber min={0} precision={2} style={{ width: 120 }} value={amt(h.id, i.id) || null} disabled={!can('feeStructure.write')}
                 onChange={(v) => {
                   setAmounts((a) => ({ ...a, [key(h.id, i.id)]: v ?? 0 }))
                   setDirty(true)

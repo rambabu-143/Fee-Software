@@ -2,6 +2,7 @@ import { Button, Empty, Form, Input, InputNumber, Popconfirm, Select, Space, Tab
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { useSelection } from '../selection'
+import { Gate, useCan } from '../session'
 import { downloadCsv } from '../csv'
 import FacilityPage from './Facility'
 
@@ -24,6 +25,7 @@ export default function Transport() {
 
 function Stops() {
   const { schoolId } = useSelection()
+  const can = useCan()
   const [routes, setRoutes] = useState<Facility[]>([])
   const [slabs, setSlabs] = useState<Facility[]>([])
   const [routeId, setRouteId] = useState<number>()
@@ -59,8 +61,10 @@ function Stops() {
     <>
       <Space wrap style={{ marginBottom: 16 }}>
         <Select placeholder="Route" style={{ width: 200 }} value={routeId} onChange={setRouteId} options={routes.map((r) => ({ value: r.id, label: r.name }))} />
-        <Input placeholder="New route name" value={newRoute} onChange={(e) => setNewRoute(e.target.value)} onPressEnter={addRoute} style={{ width: 180 }} />
-        <Button onClick={addRoute}>Add route</Button>
+        {can('facilities.write') && <>
+          <Input placeholder="New route name" value={newRoute} onChange={(e) => setNewRoute(e.target.value)} onPressEnter={addRoute} style={{ width: 180 }} />
+          <Button onClick={addRoute}>Add route</Button>
+        </>}
       </Space>
       {!routeId ? <Empty description="Pick or add a route" /> : (
         <>
@@ -71,12 +75,14 @@ function Stops() {
             { title: 'Pickup', dataIndex: 'pickupTime' },
             { title: 'Drop', dataIndex: 'dropTime' },
             { title: '', render: (_: unknown, s: Stop) => (
-              <Popconfirm title="Delete this stop? (Refused if students use it.)" onConfirm={() => run(api(`/stops/${s.id}`, { method: 'DELETE' }))}>
-                <Button size="small" danger>Delete</Button>
-              </Popconfirm>
+              <Gate cap="stops.write" hide>
+                <Popconfirm title="Delete this stop? (Refused if students use it.)" onConfirm={() => run(api(`/stops/${s.id}`, { method: 'DELETE' }))}>
+                  <Button size="small" danger>Delete</Button>
+                </Popconfirm>
+              </Gate>
             ) },
           ]} />
-          <Form form={form} layout="inline" onFinish={addStop} initialValues={{ sequence: stops.length + 1 }}>
+          {can('stops.write') && <Form form={form} layout="inline" onFinish={addStop} initialValues={{ sequence: stops.length + 1 }}>
             <Form.Item name="sequence" rules={[{ required: true }]}><InputNumber min={1} placeholder="#" style={{ width: 70 }} /></Form.Item>
             <Form.Item name="name" rules={[{ required: true }]}><Input placeholder="Stop name" style={{ width: 200 }} /></Form.Item>
             <Form.Item name="slabId" rules={[{ required: true, message: 'Slab' }]}>
@@ -85,7 +91,7 @@ function Stops() {
             <Form.Item name="pickupTime" rules={[{ pattern: /^([01]?\d|2[0-3]):[0-5]\d$/, message: 'HH:MM' }]}><Input placeholder="Pickup HH:MM" style={{ width: 120 }} /></Form.Item>
             <Form.Item name="dropTime" rules={[{ pattern: /^([01]?\d|2[0-3]):[0-5]\d$/, message: 'HH:MM' }]}><Input placeholder="Drop HH:MM" style={{ width: 120 }} /></Form.Item>
             <Button type="primary" htmlType="submit">Add stop</Button>
-          </Form>
+          </Form>}
         </>
       )}
     </>

@@ -1,6 +1,7 @@
 import { Alert, Button, Card, Descriptions, Form, Input, InputNumber, Modal, Select, Space, Table, Tabs, Tag, message } from 'antd'
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
+import { Gate } from '../session'
 import { useSelection } from '../selection'
 import { inr } from '../bill'
 import { downloadCsv } from '../csv'
@@ -85,8 +86,8 @@ function List() {
         <Select allowClear placeholder="Kind" style={{ width: 130 }} options={kinds} onChange={(kind) => setF({ ...f, kind })} />
         <Select allowClear placeholder="Status" style={{ width: 130 }} options={statuses} onChange={(status) => setF({ ...f, status })} />
         <Select allowClear placeholder="Received in (all years)" style={{ width: 190 }} options={years.map((y) => ({ value: y.id, label: y.label }))} onChange={(year) => setF({ ...f, year })} />
-        <Button type="primary" onClick={() => { add.setFieldsValue({ receivedYearId: yearId }); setAdding(true) }}>Add deposit</Button>
-        <Button onClick={() => file.current?.click()}>Import CSV</Button>
+        <Gate cap="deposits.write"><Button type="primary" onClick={() => { add.setFieldsValue({ receivedYearId: yearId }); setAdding(true) }}>Add deposit</Button></Gate>
+        <Gate cap="deposits.admin"><Button onClick={() => file.current?.click()}>Import CSV</Button></Gate>
         <input ref={file} type="file" accept=".csv,text/csv" hidden onChange={(e) => { const x = e.target.files?.[0]; e.target.value = ''; if (x) importCsv(x).catch((err) => message.error(err.message)) }} />
         <Button onClick={() => downloadCsv('deposits', ['Adm no', 'Name', 'Kind', 'Amount', 'Received', 'Status', 'Refunded', 'Deduction'],
           rows.map((r) => [r.admissionNo, r.name, r.kind, r.amount, r.receivedYear, r.status, r.refundAmount ?? '', r.deduction ?? '']))}>Export</Button>
@@ -107,7 +108,7 @@ function List() {
         { title: 'Status', dataIndex: 'status', render: (v: Status) => <Tag color={tone[v]}>{v}</Tag> },
         { title: 'Refund', render: (_, r) => (r.status === 'HELD' ? '' : `${inr(r.refundAmount ?? '0')}${Number(r.deduction) ? ` (−${inr(r.deduction!)})` : ''} · ${r.refundedAt?.slice(0, 10) ?? ''}`) },
         // ponytail: shown to all; the API allows only ADMIN and returns 403 otherwise.
-        { title: '', render: (_, r) => r.status === 'HELD' && <Button size="small" onClick={() => { refund.setFieldsValue({ refundAmount: Number(r.amount), deduction: 0, mode: 'CASH', date: today(), reference: undefined, remarks: undefined }); setRefunding(r) }}>Refund</Button> },
+        { title: '', render: (_, r) => r.status === 'HELD' && <Gate cap="deposits.admin" hide><Button size="small" onClick={() => { refund.setFieldsValue({ refundAmount: Number(r.amount), deduction: 0, mode: 'CASH', date: today(), reference: undefined, remarks: undefined }); setRefunding(r) }}>Refund</Button></Gate> },
       ]} />
 
       <Modal title="Add deposit" open={adding} onCancel={() => setAdding(false)} onOk={() => add.submit()}>

@@ -1,6 +1,7 @@
 import { Button, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, message } from 'antd'
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import { Gate } from '../session'
 import { useSelection } from '../selection'
 
 type FeeHead = { id: number; name: string; type: string }
@@ -27,12 +28,12 @@ export default function FeeHeads() {
 
   return (
     <>
-      <Button type="primary" style={{ marginBottom: 16 }} onClick={() => {
+      <Gate cap="feeHeads.write"><Button type="primary" style={{ marginBottom: 16 }} onClick={() => {
         form.resetFields()
         setEditing({})
       }}>
         Add fee head
-      </Button>
+      </Button></Gate>
       <Table rowKey="id" dataSource={rows} pagination={false} scroll={{ x: true }} columns={[
         { title: 'Fee head', dataIndex: 'name' },
         { title: 'Type', dataIndex: 'type', render: (t: string) => <Tag>{t}</Tag> },
@@ -40,13 +41,13 @@ export default function FeeHeads() {
           title: '',
           render: (_, r) => (
             <Space>
-              <Button size="small" onClick={() => {
+              <Gate cap="feeHeads.write" hide><Button size="small" onClick={() => {
                 form.setFieldsValue(r)
                 setEditing(r)
-              }}>Edit</Button>
-              <Popconfirm title="Delete this fee head?" onConfirm={() => run(api(`/fee-heads/${r.id}`, { method: 'DELETE' }))}>
+              }}>Edit</Button></Gate>
+              <Gate cap="feeHeads.write" hide><Popconfirm title="Delete this fee head?" onConfirm={() => run(api(`/fee-heads/${r.id}`, { method: 'DELETE' }))}>
                 <Button size="small" danger>Delete</Button>
-              </Popconfirm>
+              </Popconfirm></Gate>
             </Space>
           ),
         },

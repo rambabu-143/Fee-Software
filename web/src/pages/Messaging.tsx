@@ -1,6 +1,7 @@
 import { Alert, Button, Form, Input, Modal, Popconfirm, Select, Space, Table, Tabs, Tag, message } from 'antd'
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import { Gate, useCan } from '../session'
 import { useSelection } from '../selection'
 
 type Row = Record<string, any> & { id: number }
@@ -42,13 +43,15 @@ const KINDS = {
 type Kind = keyof typeof KINDS
 
 export default function Messaging() {
+  const can = useCan()
   return (
     <>
       <Alert type="warning" showIcon style={{ marginBottom: 16 }}
         message="Sending is STUB / log-only unless a real provider is configured on the server (SMS_PROVIDER, SMTP_*). Nothing leaves the machine; every attempt is only written to the log." />
       <Tabs items={[
         { key: 'sms', label: 'SMS', children: <Panel kind="sms" /> },
-        { key: 'email', label: 'Email', children: <Panel kind="email" /> },
+        // every /email-templates route is ADMIN, so the Email tab is only usable by ADMIN
+        ...(can('email.templates') ? [{ key: 'email', label: 'Email', children: <Panel kind="email" /> }] : []),
       ]} />
     </>
   )
@@ -93,13 +96,13 @@ function Panel({ kind }: { kind: Kind }) {
 
   return (
     <>
-      <Button type="primary" onClick={() => open('new')} style={{ marginBottom: 12 }}>Add template</Button>
+      <Gate cap={kind === 'sms' ? 'sms.templates' : 'email.templates'}><Button type="primary" onClick={() => open('new')} style={{ marginBottom: 12 }}>Add template</Button></Gate>
       <Table rowKey="id" size="small" pagination={false} dataSource={tpls} scroll={{ x: true }} style={{ marginBottom: 24 }} columns={[
         ...k.cols,
         { title: '', render: (_: unknown, t: Row) => (
           <Space>
-            <Button size="small" onClick={() => open(t)}>Edit</Button>
-            <Popconfirm title="Delete this template?" onConfirm={() => del(t.id)}><Button size="small" danger>Delete</Button></Popconfirm>
+            <Gate cap={kind === 'sms' ? 'sms.templates' : 'email.templates'} hide><Button size="small" onClick={() => open(t)}>Edit</Button></Gate>
+            <Gate cap={kind === 'sms' ? 'sms.templates' : 'email.templates'} hide><Popconfirm title="Delete this template?" onConfirm={() => del(t.id)}><Button size="small" danger>Delete</Button></Popconfirm></Gate>
           </Space>
         ) },
       ]} />

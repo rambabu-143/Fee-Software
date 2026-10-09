@@ -128,7 +128,7 @@ describe('security (e2e)', () => {
     it('covers the whole OpenAPI surface', async () => {
       const doc = SwaggerModule.createDocument(app, new DocumentBuilder().build());
       const ops = Object.entries(doc.paths).flatMap(([p, o]) => Object.keys(o as object).map((m) => ({ m, p: p.replace(/\{[^}]+\}/g, '1') })))
-        .filter((o) => o.p !== '/api/auth/login');
+        .filter((o) => o.p !== '/api/auth/login' && o.p !== '/api/health'); // the only @Public() routes
       expect(ops.length).toBeGreaterThan(140);
       const bad: string[] = [];
       for (const { m, p } of ops) {

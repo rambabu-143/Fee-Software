@@ -1,6 +1,7 @@
 import { Button, Empty, Input, InputNumber, Popconfirm, Space, Table, message } from 'antd'
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import { Gate, useCan } from '../session'
 import { useSelection } from '../selection'
 import type { Installment } from './Installments'
 
@@ -13,6 +14,7 @@ const money = (n: number) => n.toLocaleString('en-IN', { minimumFractionDigits: 
 // each priced per installment. `kind` picks which one; Transport.tsx/Hostel.tsx wrap this.
 export default function FacilityPage({ kind, label }: { kind: 'TRANSPORT' | 'HOSTEL' | 'SLAB'; label: string }) {
   const { schoolId, yearId } = useSelection()
+  const can = useCan()
   const [rows, setRows] = useState<Facility[]>([])
   const [insts, setInsts] = useState<Installment[]>([])
   const [amounts, setAmounts] = useState<Record<string, number>>({})
@@ -73,10 +75,10 @@ export default function FacilityPage({ kind, label }: { kind: 'TRANSPORT' | 'HOS
 
   return (
     <>
-      <Space style={{ marginBottom: 16 }}>
+      {can('facilities.write') && <Space style={{ marginBottom: 16 }}>
         <Input placeholder={`New ${label.toLowerCase()} name`} value={newName} onChange={(e) => setNewName(e.target.value)} onPressEnter={addFacility} style={{ width: 200 }} />
         <Button onClick={addFacility}>Add {label.toLowerCase()}</Button>
-      </Space>
+      </Space>}
       {!rows.length || !insts.length ? (
         <Empty description={`Add a ${label.toLowerCase()} and installments for this school and year first`} />
       ) : (
@@ -88,7 +90,7 @@ export default function FacilityPage({ kind, label }: { kind: 'TRANSPORT' | 'HOS
                 title: i.label,
                 key: i.id,
                 render: (_: unknown, f: Facility) => (
-                  <InputNumber min={0} precision={2} style={{ width: 120 }} value={amt(f.id, i.id) || null}
+                  <InputNumber min={0} precision={2} style={{ width: 120 }} value={amt(f.id, i.id) || null} disabled={!can('facilityStructure.write')}
                     onChange={(v) => {
                       setAmounts((a) => ({ ...a, [key(f.id, i.id)]: v ?? 0 }))
                       setDirty(true)
@@ -98,13 +100,13 @@ export default function FacilityPage({ kind, label }: { kind: 'TRANSPORT' | 'HOS
               { title: 'Total', key: 'total', align: 'right' as const, render: (_: unknown, f: Facility) => money(rowTotal(f.id)) },
               {
                 title: '', key: 'del', render: (_: unknown, f: Facility) => (
-                  <Popconfirm title={`Delete this ${label.toLowerCase()}?`} onConfirm={() => removeFacility(f.id)}>
+                  <Gate cap="facilities.write" hide><Popconfirm title={`Delete this ${label.toLowerCase()}?`} onConfirm={() => removeFacility(f.id)}>
                     <Button size="small" danger>Delete</Button>
-                  </Popconfirm>
+                  </Popconfirm></Gate>
                 ),
               },
             ]} />
-          <Button type="primary" onClick={save} disabled={!dirty}>Save {label.toLowerCase()} fees</Button>
+          <Gate cap="facilityStructure.write"><Button type="primary" onClick={save} disabled={!dirty}>Save {label.toLowerCase()} fees</Button></Gate>
         </>
       )}
     </>

@@ -1,0 +1,41 @@
+# Copy to docker-compose.prod.yml, put the values below in a .env next to it (never commit that file).
+#   docker compose -f docker-compose.prod.yml --env-file .env up -d --build
+# First run only (creates the demo schools + the admin login from SEED_ADMIN_PASSWORD):
+#   docker compose -f docker-compose.prod.yml run --rm api npx prisma db seed
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fees}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-fees}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: ./api
+    restart: unless-stopped
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-fees}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-fees}?schema=public
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (long random string)}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
+      DISABLE_DOCS: ${DISABLE_DOCS:-true}
+      SMS_PROVIDER: ${SMS_PROVIDER:-}
+      PORT: "3100"
+    # No published port: only the web container (nginx) talks to it.
+
+  web:
+    build: ./web
+    restart: unless-stopped
+    depends_on: [api]
+    ports: ["80:80"]
+
+volumes:
+  pgdata:

@@ -8,8 +8,9 @@ import { PaymentMode, type Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { assertSchool, CurrentUser, Roles, type AuthUser } from '../auth/auth.guard.js';
 import { BillingService } from './billing.service.js';
-import { allocate, fromPaise, toPaise } from './bill.js';
+import { allocate, fromPaise, toPaise, splitHeads } from './bill.js';
 import { receiptPdf } from './pdf.js';
+import { autoDeposits, voidDeposits } from './deposit-sync.js';
 
 class CollectDto {
   @IsInt() studentId: number;
@@ -32,7 +33,7 @@ class ReconcileDto {
   @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) bounceCharge?: number;
 }
 
-class CancelDto {
+class CancelPaymentDto {
   @IsString() @MinLength(3) reason: string;
 }
 
@@ -44,15 +45,19 @@ const receiptInclude = {
 } satisfies Prisma.PaymentInclude;
 
 type ReceiptRow = Prisma.PaymentGetPayload<{ include: typeof receiptInclude }>;
-// The arrear portion (no installment) is listed first, as 'Previous arrear', with its amount in charges.
+// The installment-less row holds the previous-year arrear and/or a bounce charge; each is listed first as its own
+// line ('Previous arrear', 'Bounce charge') with its amount in charges.
 const present = (p: ReceiptRow) => ({
   ...p,
   amount: p.amount.toFixed(2),
   allocations: p.allocations
     .sort((a, b) => (a.installment?.number ?? 0) - (b.installment?.number ?? 0))
-    .map((a) => a.installment
-      ? { installment: a.installment.label, charges: a.charges.toFixed(2), fine: a.fine.toFixed(2) }
-      : { installment: 'Previous arrear', charges: a.arrear.toFixed(2), fine: a.fine.toFixed(2) }),
+    .flatMap((a) => a.installment
+      ? [{ installment: a.installment.label, charges: a.charges.toFixed(2), fine: a.fine.toFixed(2) }]
+      : [
+        ...(a.arrear.gt(0) ? [{ installment: 'Previous arrear', charges: a.arrear.toFixed(2), fine: a.fine.toFixed(2) }] : []),
+        ...(a.bounce.gt(0) ? [{ installment: 'Bounce charge', charges: a.bounce.toFixed(2), fine: '0.00' }] : []),
+      ]),
 });
 
 @Controller('payments')
@@ -132,7 +137,7 @@ export class PaymentsController {
 
       let split;
       try {
-        split = allocate(fresh.installments, amount, fresh.arrear.due);
+        split = allocate(fresh.installments, amount, fresh.arrear.due, fresh.bounce.due);
       } catch (e) {
         if (e instanceof RangeError) throw new BadRequestException(`${e.message} (₹${fromPaise(fresh.totals.due)})`);
         throw e;
@@ -148,7 +153,22 @@ export class PaymentsController {
           "ReceiptCounter".last, COALESCE((SELECT MAX("receiptNo") FROM "Payment" WHERE "schoolId" = ${sid} AND "yearId" = ${dto.yearId}), 0))
         RETURNING last`;
 
-      return tx.payment.create({
+      // Exact per-head split of every installment payment (rule: splitHeads in bill.ts). `before` = charges already
+      // paid on that installment by live receipts, read under the enrollment lock taken above.
+      const refundableIds = new Set((await tx.feeHead.findMany({ where: { schoolId: sid, type: 'REFUNDABLE' }, select: { id: true } })).map((h) => h.id));
+      const headRows = new Map<number, { feeHeadId: number; name: string; refundable: boolean; amount: string }[]>();
+      for (const a of split) {
+        const inst = a.installmentId === null ? undefined : fresh.installments.find((i) => i.installmentId === a.installmentId);
+        if (!inst || a.charges <= 0) continue;
+        const prior = await tx.paymentAllocation.aggregate({
+          _sum: { charges: true },
+          where: { installmentId: inst.installmentId, payment: { studentId: dto.studentId, yearId: dto.yearId, cancelledAt: null, clearStatus: { not: 'BOUNCED' } } },
+        });
+        const before = toPaise((prior._sum.charges ?? 0).toString());
+        headRows.set(inst.installmentId, splitHeads(inst.lines, refundableIds, before, a.charges).map((h) => ({ ...h, amount: fromPaise(h.amount) })));
+      }
+
+      const created = await tx.payment.create({
         data: {
           schoolId: bill.student.schoolId, yearId: dto.yearId, studentId: dto.studentId, receiptNo, date,
           mode: dto.mode, reference: dto.mode === 'CASH' ? null : dto.reference, remarks: dto.remarks,
@@ -157,19 +177,24 @@ export class PaymentsController {
           amount: fromPaise(amount), createdBy: u.username,
           allocations: {
             create: split.map((a) => ({
-              installmentId: a.installmentId, charges: fromPaise(a.charges), fine: fromPaise(a.fine), arrear: fromPaise(a.arrear ?? 0),
+              installmentId: a.installmentId, charges: fromPaise(a.charges), fine: fromPaise(a.fine),
+              arrear: fromPaise(a.arrear ?? 0), bounce: fromPaise(a.bounce ?? 0),
+              ...(a.installmentId !== null && headRows.has(a.installmentId) ? { heads: { create: headRows.get(a.installmentId) } } : {}),
             })),
           },
         },
         include: receiptInclude,
       });
+      // A pending cheque counts as paid until it bounces, so its deposit exists now; cancel or bounce voids it.
+      await autoDeposits(tx, await this.billing.build(dto.studentId, dto.yearId, date, tx), dto.yearId, created.id, u.username);
+      return created;
     });
     return present(payment);
   }
 
   @Roles('ADMIN')
   @Post(':id/cancel')
-  async cancel(@CurrentUser() u: AuthUser, @Param('id', ParseIntPipe) id: number, @Body() dto: CancelDto) {
+  async cancel(@CurrentUser() u: AuthUser, @Param('id', ParseIntPipe) id: number, @Body() dto: CancelPaymentDto) {
     const updated = await this.prisma.$transaction(async (tx) => {
       // Same enrollment row lock as collect()/reconcile(): double-clicks and cancel-vs-collect can't interleave.
       const p = await tx.payment.findUniqueOrThrow({ where: { id } });
@@ -183,6 +208,7 @@ export class PaymentsController {
         where: { studentId: cur.studentId, yearId: cur.yearId, cancelledAt: null, clearStatus: { not: 'BOUNCED' }, receiptNo: { gt: cur.receiptNo } },
       });
       if (later) throw new BadRequestException(`Cancel the later receipt #${later.receiptNo} first`);
+      await voidDeposits(tx, id);
       return tx.payment.update({
         where: { id },
         data: { cancelledAt: new Date(), cancelledBy: u.username, cancelReason: dto.reason },
@@ -193,7 +219,8 @@ export class PaymentsController {
   }
 
   // Bank credit (or return) of a cheque / online receipt. A bounced receipt stops counting, like a cancelled one.
-  // ponytail: bounceCharge is only recorded on the receipt; billing it to the family is not done.
+  // bounceCharge becomes a separate amount owed on the student's bill (no fine, paid first after any arrear).
+  // Bounced is final: there is no un-bounce, so the charge is never reversed (re-present the cheque as a new receipt).
   @Roles('ADMIN', 'ACCOUNTANT')
   @Post(':id/reconcile')
   async reconcile(@CurrentUser() u: AuthUser, @Param('id', ParseIntPipe) id: number, @Body() dto: ReconcileDto) {
@@ -217,6 +244,7 @@ export class PaymentsController {
         });
         if (later) throw new BadRequestException(`Cancel the later receipt #${later.receiptNo} first`);
       }
+      if (dto.status === 'BOUNCED') await voidDeposits(tx, id);
       return tx.payment.update({
         where: { id },
         data: dto.status === 'CLEARED'

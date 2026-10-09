@@ -1,9 +1,10 @@
-import { Button, Form, Input, InputNumber, Modal, Select, Space, message } from 'antd'
+import { AutoComplete, Button, Form, Input, InputNumber, Modal, Select, Space, message } from 'antd'
 import { useEffect, useState } from 'react'
 import { api } from './api'
+import { useSelection } from './selection'
 
-type Row = { feeHeadId: number; percent: string | null; amount: string | null; reason: string }
-type FormRow = { feeHeadId: number; kind: 'percent' | 'amount'; value: number; reason: string }
+type Row = { feeHeadId: number; percent: string | null; amount: string | null; reason: string; category: string | null }
+type FormRow = { feeHeadId: number; kind: 'percent' | 'amount'; value: number; reason: string; category?: string }
 
 // Per-student discounts for the selected year; the server replaces the whole list on save.
 export function ConcessionsModal({ student, yearId, heads, onClose }: {
@@ -11,13 +12,17 @@ export function ConcessionsModal({ student, yearId, heads, onClose }: {
 }) {
   const [form] = Form.useForm()
   const [saving, setSaving] = useState(false)
+  const { schoolId } = useSelection()
+  const [categories, setCategories] = useState<string[]>([])
 
   useEffect(() => {
     if (!student) return
     form.resetFields()
+    // Categories already used in this school, offered as suggestions (free text is still allowed).
+    api<string[]>(`/students/concession-categories?schoolId=${schoolId}`).then(setCategories).catch(() => setCategories([]))
     api<Row[]>(`/students/${student.id}/concessions?yearId=${yearId}`)
       .then((rows) => form.setFieldValue('items', rows.map((r) => ({
-        feeHeadId: r.feeHeadId, reason: r.reason,
+        feeHeadId: r.feeHeadId, reason: r.reason, category: r.category ?? undefined,
         kind: r.percent !== null ? 'percent' : 'amount', value: Number(r.percent ?? r.amount),
       }))))
       .catch((e) => message.error(e.message))
@@ -28,7 +33,7 @@ export function ConcessionsModal({ student, yearId, heads, onClose }: {
     try {
       await api(`/students/${student!.id}/concessions`, {
         method: 'PUT',
-        body: JSON.stringify({ yearId, items: items.map(({ kind, value, ...i }) => ({ ...i, [kind]: value })) }),
+        body: JSON.stringify({ yearId, items: items.map(({ kind, value, category, ...i }) => ({ ...i, [kind]: value, ...(category?.trim() ? { category: category.trim() } : {}) })) }),
       })
       message.success('Concessions saved')
       onClose()
@@ -41,7 +46,7 @@ export function ConcessionsModal({ student, yearId, heads, onClose }: {
 
   return (
     <Modal title={student && `Concessions · ${student.name}`} open={!!student} onCancel={onClose} onOk={form.submit}
-      okText="Save" confirmLoading={saving} width={780}>
+      okText="Save" confirmLoading={saving} width={940}>
       <Form form={form} onFinish={save}>
         <Form.List name="items">
           {(fields, { add, remove }) => (
@@ -59,6 +64,10 @@ export function ConcessionsModal({ student, yearId, heads, onClose }: {
                   </Form.Item>
                   <Form.Item name={[f.name, 'reason']} rules={[{ required: true, min: 2, message: 'Reason' }]}>
                     <Input placeholder="Reason (e.g. Sibling)" style={{ width: 150 }} />
+                  </Form.Item>
+                  <Form.Item name={[f.name, 'category']}>
+                    <AutoComplete placeholder="Category (e.g. Staff)" style={{ width: 150 }} options={categories.map((c) => ({ value: c }))}
+                      filterOption={(input, o) => (o?.value ?? '').toLowerCase().includes(input.toLowerCase())} />
                   </Form.Item>
                   <Button danger onClick={() => remove(f.name)}>Remove</Button>
                 </Space>

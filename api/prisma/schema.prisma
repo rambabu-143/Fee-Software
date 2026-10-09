@@ -262,6 +262,24 @@ model PaymentAllocation {
   charges       Decimal      @db.Decimal(12, 2)
   fine          Decimal      @db.Decimal(12, 2)
   arrear        Decimal      @default(0) @db.Decimal(12, 2)
+  // Bounce charge of an earlier bounced cheque, paid off by this receipt (null-installment row, like arrear).
+  bounce        Decimal      @default(0) @db.Decimal(12, 2)
+  // Exact split of `charges` across the installment's fee heads (see splitHeads in billing/bill.ts).
+  heads         PaymentAllocationHead[]
+}
+
+// One fee head's share of an allocation's charges. feeHeadId is plain (no FK): facility/transport lines carry
+// negative ids and 0 means "unallocated"; `name` and `refundable` are snapshots so reports never join back.
+model PaymentAllocationHead {
+  id           Int               @id @default(autoincrement())
+  allocationId Int
+  allocation   PaymentAllocation @relation(fields: [allocationId], references: [id], onDelete: Cascade)
+  feeHeadId    Int
+  name         String
+  refundable   Boolean           @default(false)
+  amount       Decimal           @db.Decimal(12, 2)
+
+  @@index([allocationId])
 }
 
 model ReceiptCounter {
@@ -607,6 +625,8 @@ model Deposit {
   paymentId      Int?
   payment        Payment?      @relation(fields: [paymentId], references: [id])
   status         DepositStatus @default(HELD)
+  // true = flipped to REFUNDED because live vouchers paid it out in full (cancelling one reverts it to HELD).
+  autoRefunded   Boolean       @default(false)
   refundedAt     DateTime?     @db.Date
   refundAmount   Decimal?      @db.Decimal(12, 2)
   deduction      Decimal?      @db.Decimal(12, 2)

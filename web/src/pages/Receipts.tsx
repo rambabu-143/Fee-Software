@@ -2,6 +2,7 @@ import { Button, Input, Modal, Space, Table, Tag, message } from 'antd'
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { useSelection } from '../selection'
+import { Gate } from '../session'
 import { inr } from '../bill'
 import { ReceiptModal, type Receipt } from '../receipt'
 import { ReconcileModal } from '../moneyShared'
@@ -70,9 +71,8 @@ export default function Receipts() {
           title: '', render: (_, r) => (
             <Space>
               <Button size="small" onClick={() => setViewing(r)}>View</Button>
-              {/* ponytail: shown to all; the API allows only ADMIN and returns 403 otherwise. */}
-              {!r.cancelledAt && r.mode !== 'CASH' && r.clearStatus !== 'BOUNCED' && <Button size="small" onClick={() => setReconciling(r)}>Reconcile</Button>}
-              {!r.cancelledAt && <Button size="small" danger onClick={() => { setReason(''); setCancelling(r) }}>Cancel</Button>}
+              {!r.cancelledAt && r.mode !== 'CASH' && r.clearStatus !== 'BOUNCED' && <Gate cap="payments.reconcile" hide><Button size="small" onClick={() => setReconciling(r)}>Reconcile</Button></Gate>}
+              {!r.cancelledAt && <Gate cap="payments.cancel" hide><Button size="small" danger onClick={() => { setReason(''); setCancelling(r) }}>Cancel</Button></Gate>}
             </Space>
           ),
         },
