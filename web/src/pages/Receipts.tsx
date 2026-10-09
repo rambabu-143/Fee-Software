@@ -2,13 +2,14 @@ import { Button, Input, Modal, Space, Table, Tag, message } from 'antd'
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { useSelection } from '../selection'
-import { Gate } from '../session'
+import { Gate, useCan } from '../session'
 import { inr } from '../bill'
 import { ReceiptModal, type Receipt } from '../receipt'
 import { ReconcileModal } from '../moneyShared'
 
 export default function Receipts() {
   const { schoolId, yearId } = useSelection()
+  const canBanks = useCan()('banks.read')
   const [rows, setRows] = useState<Receipt[]>([])
   const [range, setRange] = useState({ from: '', to: '' })
   const [viewing, setViewing] = useState<Receipt | null>(null)
@@ -30,8 +31,8 @@ export default function Receipts() {
 
   // Bank names for the Mode column; the bank list is ADMIN/ACCOUNTANT only, so a 403 just hides names.
   useEffect(() => {
-    if (schoolId) api<{ id: number; name: string }[]>(`/banks?schoolId=${schoolId}`).then((b) => setBanks(Object.fromEntries(b.map((x) => [x.id, x.name])))).catch(() => setBanks({}))
-  }, [schoolId])
+    if (schoolId && canBanks) api<{ id: number; name: string }[]>(`/banks?schoolId=${schoolId}`).then((b) => setBanks(Object.fromEntries(b.map((x) => [x.id, x.name])))).catch(() => setBanks({}))
+  }, [schoolId, canBanks])
 
   async function cancel() {
     try {

@@ -100,12 +100,13 @@ function ReconcileTab() {
 
 function ReportTab() {
   const { schoolId, yearId } = useSelection()
+  const canBanks = useCan()('banks.read')
   const [banks, setBanks] = useState<Bank[]>([])
   const [f, setF] = useState<{ from?: string; to?: string; mode?: string; bankId?: number; status?: string }>({})
   const [data, setData] = useState<{ rows: BankRow[]; totals: { count: number; amount: string; fine: string } } | null>(null)
   useEffect(() => {
-    if (schoolId) api<Bank[]>(`/banks?schoolId=${schoolId}`).then(setBanks).catch(() => setBanks([]))
-  }, [schoolId])
+    if (schoolId && canBanks) api<Bank[]>(`/banks?schoolId=${schoolId}`).then(setBanks).catch(() => setBanks([]))
+  }, [schoolId, canBanks])
   const q = () => qs({ schoolId, yearId, ...f })
   useEffect(() => {
     if (schoolId && yearId) api<NonNullable<typeof data>>(`/reports/banking?${q()}`).then(setData).catch((e) => message.error(e.message))
