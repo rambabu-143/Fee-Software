@@ -58,7 +58,7 @@ export class BillingService {
       ...[e.transport?.pickupStop?.slabId, e.transport?.dropStop?.slabId].filter((x): x is number => x != null),
     ]);
 
-    const [installments, structure, allocations, facilityStructure, bounced] = await Promise.all([
+    const [installments, structure, allocations, facilityStructure, bounced, transportDeposits] = await Promise.all([
       db.installment.findMany({ where: { schoolId, yearId } }),
       db.feeStructure.findMany({
         where: { yearId, standardId: { in: [...new Set(enrollments.map((e) => e.section.standardId))] } },
@@ -77,6 +77,7 @@ export class BillingService {
         select: { studentId: true, receiptNo: true, bounceCharge: true },
         orderBy: { receiptNo: 'asc' },
       }),
+      db.deposit.findMany({ where: { studentId: { in: studentIds }, kind: 'TRANSPORT' }, select: { studentId: true } }),
     ]);
     const inst = installments.map((i) => ({ ...i, finePerDay: toPaise(i.finePerDay.toFixed(2)) }));
 
@@ -109,6 +110,8 @@ export class BillingService {
         // A waiver only trims a positive arrear; a credit is left as is.
         arrear: e.arrearCarry ? netArrear(e.arrearCarry) : 0,
         bounceCharges: items.reduce((n, i) => n + i.amount, 0),
+        onTransport: !!(e.transport?.pickupStop || e.transport?.dropStop) || e.facilityAssignments.some((a) => a.facility.kind === 'TRANSPORT'),
+        holdsTransportDeposit: transportDeposits.some((d) => d.studentId === e.studentId),
         concessions: e.concessions.map((c) => ({
           feeHeadId: c.feeHeadId, reason: c.reason,
           percent: c.percent === null ? null : Number(c.percent), amount: c.amount === null ? null : toPaise(c.amount.toFixed(2)),

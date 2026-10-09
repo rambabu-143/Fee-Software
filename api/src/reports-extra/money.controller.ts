@@ -135,7 +135,8 @@ export class MoneyReportsController {
     return respond(out, format, 'bifurcation');
   }
 
-  // Transport charged vs collected, per class or student. Stop-based transport only (no STAFF special case).
+  // Transport charged vs collected, per class or student. Stop-based transport only.
+  // staff=true is legacy's "STAFF" view: only students who have a guardian flagged isStaff.
   @Get('transport-bifurcation')
   async transportBifurcation(
     @CurrentUser() u: AuthUser,
@@ -144,11 +145,19 @@ export class MoneyReportsController {
     @Query('groupBy') groupBy = 'class',
     @Query('standardId', opt) standardId?: number,
     @Query('sectionId', opt) sectionId?: number,
+    @Query('staff') staff?: string,
     @Query('format') format?: string,
   ) {
     assertSchool(u, schoolId);
     if (groupBy !== 'class' && groupBy !== 'student') throw new BadRequestException('groupBy must be class or student');
-    const { bills, shares } = await paidShares(this.prisma, this.billing, { schoolId, yearId, standardId, sectionId });
+    if (staff !== undefined && !['true', 'false', '1', '0'].includes(staff)) throw new BadRequestException('staff must be true or false');
+    const all = await paidShares(this.prisma, this.billing, { schoolId, yearId, standardId, sectionId });
+    let { bills, shares } = all;
+    if (staff === 'true' || staff === '1') {
+      const staffIds = new Set((await this.prisma.guardian.findMany({ where: { isStaff: true, student: { schoolId } }, select: { studentId: true } })).map((g) => g.studentId));
+      bills = bills.filter((b) => staffIds.has(b.student.id));
+      shares = shares.filter((x) => staffIds.has(x.studentId));
+    }
     const key = (b: (typeof bills)[number]['student']) => (groupBy === 'class' ? b.className : b.admissionNo);
     const rows = new Map<string, { admissionNo?: string; name?: string; className: string; charged: number; paid: number }>();
     const row = (b: (typeof bills)[number]['student']) => {
@@ -166,6 +175,71 @@ export class MoneyReportsController {
       .sort((a, b) => a.className.localeCompare(b.className) || (a.admissionNo ?? '').localeCompare(b.admissionNo ?? ''))
       .map((r) => ({ ...r, charged: fromPaise(r.charged), paid: fromPaise(r.paid), balance: fromPaise(r.charged - r.paid) }));
     return respond(out, format, 'transport-bifurcation');
+  }
+
+  // Class XII leavers: Earmarked Levies XI / XII received (exact per-head receipts, live ones only) against the
+  // refund vouchers already paid out. A voucher's remarks mention "XI" or "XII" to say which levy it returns;
+  // with neither it counts against XII, as legacy only ever refunded XII. pending=1 hides fully refunded students
+  // (legacy dropped anyone already refunded). Legacy's "XI shows the XII figure when XI is zero" quirk is not carried over.
+  // ponytail: the XII class is found by name (XII / 12 / Class XII); a school using another name gets an empty report.
+  @Get('alumni')
+  async alumni(
+    @CurrentUser() u: AuthUser,
+    @Query('schoolId', ParseIntPipe) schoolId: number,
+    @Query('yearId', ParseIntPipe) yearId: number,
+    @Query('sectionId', opt) sectionId?: number,
+    @Query('pending') pending?: string,
+    @Query('format') format?: string,
+  ) {
+    assertSchool(u, schoolId);
+    const standards = (await this.prisma.standard.findMany({ where: { schoolId } })).filter((x) => /^(class\s*)?(xii|12)$/i.test(x.name.trim()));
+    const std = standards.sort((a, b) => b.sortOrder - a.sortOrder)[0];
+    if (!std) return respond([], format, 'alumni');
+    const [{ bills, shares }, enrollments] = await Promise.all([
+      paidShares(this.prisma, this.billing, { schoolId, yearId, standardId: std.id, sectionId }),
+      this.prisma.enrollment.findMany({
+        where: rollWhere(schoolId, yearId, std.id, sectionId),
+        select: { id: true, studentId: true, section: { select: { name: true } } },
+      }),
+    ]);
+    const vouchers = await this.prisma.voucher.findMany({ where: { schoolId, yearId, cancelledAt: null, enrollmentId: { in: enrollments.map((e) => e.id) } } });
+    const levy = (bucket: string) => (/earmarked\s+levies?\s+xii\b/i.test(bucket) ? 'XII' : /earmarked\s+levies?\s+xi\b/i.test(bucket) ? 'XI' : null);
+    const refundOf = (remarks: string | null) => (/\bxii\b/i.test(remarks ?? '') ? 'XII' : /\bxi\b/i.test(remarks ?? '') ? 'XI' : 'XII');
+    const acc = new Map(enrollments.map((e) => [e.studentId, { enr: e, XI: 0, XII: 0, rXI: 0, rXII: 0 }]));
+    for (const x of shares) {
+      const l = levy(x.bucket);
+      if (l) acc.get(x.studentId)![l] += x.paise;
+    }
+    const studentOf = new Map(enrollments.map((e) => [e.id, e.studentId]));
+    for (const v of vouchers) {
+      const a = acc.get(studentOf.get(v.enrollmentId)!)!;
+      a[refundOf(v.remarks) === 'XI' ? 'rXI' : 'rXII'] += toPaise(v.amount.toFixed(2));
+    }
+    const who = new Map(bills.map((b) => [b.student.id, b.student]));
+    const t = { XI: 0, rXI: 0, XII: 0, rXII: 0 };
+    let n = 0;
+    const rows: Record<string, unknown>[] = [];
+    for (const [studentId, a] of [...acc].sort((x, y) => (who.get(x[0])?.admissionNo ?? '').localeCompare(who.get(y[0])?.admissionNo ?? ''))) {
+      const st = who.get(studentId);
+      if (!st) continue; // not billed (e.g. no fee structure): nothing to report
+      const paid = a.XI + a.XII, refunded = a.rXI + a.rXII;
+      const status = !paid && !refunded ? 'NO_LEVIES' : !refunded ? 'NOT_REFUNDED' : refunded >= paid ? 'REFUNDED' : 'PARTIAL';
+      if ((pending === 'true' || pending === '1') && (status === 'REFUNDED' || status === 'NO_LEVIES')) continue;
+      t.XI += a.XI; t.rXI += a.rXI; t.XII += a.XII; t.rXII += a.rXII;
+      rows.push({
+        slNo: ++n, admissionNo: st.admissionNo, name: st.name, section: a.enr.section.name,
+        leviesXI: fromPaise(a.XI), refundXI: fromPaise(a.rXI), leviesXII: fromPaise(a.XII), refundXII: fromPaise(a.rXII),
+        totalLevies: fromPaise(paid), totalRefunded: fromPaise(refunded), balance: fromPaise(paid - refunded), status,
+      });
+    }
+    if (rows.length) {
+      rows.push({
+        slNo: '', admissionNo: '', name: 'Total', section: '', leviesXI: fromPaise(t.XI), refundXI: fromPaise(t.rXI),
+        leviesXII: fromPaise(t.XII), refundXII: fromPaise(t.rXII), totalLevies: fromPaise(t.XI + t.XII),
+        totalRefunded: fromPaise(t.rXI + t.rXII), balance: fromPaise(t.XI + t.XII - t.rXI - t.rXII), status: '',
+      });
+    }
+    return respond(rows, format, 'alumni');
   }
 
   // Per stop: students using it and the fare they owe (each leg is half the slab's yearly fare, as in billing).

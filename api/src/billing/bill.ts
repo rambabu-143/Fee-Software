@@ -25,6 +25,9 @@ export type BillInput = {
   arrear?: number;
   // Bounce charges (paise) levied on bounced cheques of this enrollment's year; owed like an arrear, never fined.
   bounceCharges?: number;
+  // Transport security: a REFUNDABLE head named like 'security' is billed to students on transport, once (see isSecurityHead).
+  onTransport?: boolean;
+  holdsTransportDeposit?: boolean;
   asOf: Date;
 };
 
@@ -60,7 +63,12 @@ export function toPaise(v: string | number): number {
 
 export const fromPaise = (p: number) => (p / 100).toFixed(2);
 
-function applies(type: HeadType, feeHeadId: number, input: BillInput) {
+// ponytail: matched by name, like Advance/Caution in deposit-sync.ts. Charged to a student only while on transport
+// and until any TRANSPORT deposit exists (any status), so renewals never re-bill it; re-joining after a refund is manual.
+export const isSecurityHead = (type: HeadType, name: string) => type === 'REFUNDABLE' && /security/i.test(name);
+
+function applies(type: HeadType, name: string, feeHeadId: number, input: BillInput) {
+  if (isSecurityHead(type, name)) return !!input.onTransport && !input.holdsTransportDeposit;
   if (type === 'ADMISSION' || type === 'REFUNDABLE') return input.isNewAdmission;
   if (type === 'OPTIONAL') return input.optionalHeadIds.includes(feeHeadId);
   return true;
@@ -76,7 +84,7 @@ export function calculateBill(input: BillInput) {
     .map((inst) => {
       const dropped = input.withdrawnOn !== null && utcDay(inst.dueDate) > utcDay(input.withdrawnOn);
       const lines = (dropped ? [] : input.structure)
-        .filter((s) => s.installmentId === inst.id && applies(s.type, s.feeHeadId, input))
+        .filter((s) => s.installmentId === inst.id && applies(s.type, s.name, s.feeHeadId, input))
         .flatMap(({ feeHeadId, name, amount }) => {
           const c = input.concessions.find((x) => x.feeHeadId === feeHeadId);
           const off = !c ? 0 : c.percent !== null ? Math.round((amount * c.percent) / 100) : Math.min(amount, c.amount ?? 0);

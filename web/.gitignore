@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+e2e/.state.json
+test-results/
+playwright-report/

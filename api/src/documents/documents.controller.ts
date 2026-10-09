@@ -9,7 +9,7 @@ import { assertSchool, CurrentUser, Roles, type AuthUser } from '../auth/auth.gu
 import { BillingService } from '../billing/billing.service.js';
 import { fromPaise, toPaise } from '../billing/bill.js';
 import {
-  admissionCertPdf, admissionFormPdf, concessionFormPdf, feeCertPdf, tcPdf, zip, type SchoolHead, type StudentForm,
+  admissionCertPdf, admissionFormPdf, concessionFormPdf, feeCertPdf, nextClassName, tcPdf, zip, type SchoolHead, type StudentForm,
 } from './pdfs.js';
 
 const MAX_FORMS = 60; // ponytail: synchronous zip; add a job queue if sections ever exceed this
@@ -250,8 +250,10 @@ export class DocumentsController {
   private concessionPdf(
     e: Awaited<ReturnType<DocumentsController['sectionRoster']>>['enrollments'][number],
     sec: Awaited<ReturnType<DocumentsController['sectionRoster']>>['sec'], lastDate: Date,
+    standards: { name: string; sortOrder: number }[],
   ) {
     return concessionFormPdf({
+      nextClass: nextClassName(standards, sec.standard.name),
       school: this.head(sec.standard.school), year: e.year.label, className: `${sec.standard.name} ${sec.name}`, s: e.student,
       nextSession: nextSession(e.year.startDate), officeSession: e.year.label, classTeacher: sec.classTeacher,
       lastDate: lastDate.toISOString().slice(0, 10),
@@ -269,10 +271,11 @@ export class DocumentsController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const { sec, enrollments } = await this.sectionRoster(u, id, yearId, studentIds, true);
+    const standards = await this.prisma.standard.findMany({ where: { schoolId: sec.standard.schoolId }, select: { name: true, sortOrder: true } });
     const eligible = enrollments.filter((e) => e.concessions.length && !e.concessions.some(isStaff));
     if (!eligible.length) throw new BadRequestException('No students with a (non-staff) concession in this section');
     const files: { name: string; buf: Buffer | string }[] = await Promise.all(eligible.map(async (e) => ({
-      name: `${e.student.admissionNo}.pdf`, buf: await this.concessionPdf(e, sec, lastDate),
+      name: `${e.student.admissionNo}.pdf`, buf: await this.concessionPdf(e, sec, lastDate, standards),
     })));
     const skipped = enrollments.filter((e) => !eligible.includes(e)).map((e) => `${e.student.admissionNo} ${e.student.name}: staff concession`);
     const none = await this.prisma.enrollment.count({ where: { sectionId: id, yearId, student: { active: true }, concessions: { none: {} } } });
@@ -290,7 +293,8 @@ export class DocumentsController {
     const e = await this.enrolled(u, id, yearId);
     if (!e.concessions.length) throw new BadRequestException('Student has no concession');
     if (e.concessions.some(isStaff)) throw new BadRequestException('Staff concessions are not re-applied through this form');
-    return this.file(res, await this.concessionPdf(e, e.section, lastDate), `concession-form-${e.student.admissionNo}.pdf`);
+    const standards = await this.prisma.standard.findMany({ where: { schoolId: e.section.standard.schoolId }, select: { name: true, sortOrder: true } });
+    return this.file(res, await this.concessionPdf(e, e.section, lastDate, standards), `concession-form-${e.student.admissionNo}.pdf`);
   }
 }
 

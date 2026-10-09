@@ -182,8 +182,16 @@ export function admissionCertPdf({ school, year, className, s }: StudentForm) {
   });
 }
 
+// Class the pupil moves to next session: the school's next standard by sortOrder (Nursery -> Prep -> I ... as the school
+// orders them). The last class stays itself (legacy: XII -> XII). null if the current class isn't in the list.
+export function nextClassName(standards: { name: string; sortOrder: number }[], current: string): string | null {
+  const ordered = [...standards].sort((a, b) => a.sortOrder - b.sortOrder);
+  const i = ordered.findIndex((x) => x.name.trim().toUpperCase() === current.trim().toUpperCase());
+  return i < 0 ? null : ordered[Math.min(i + 1, ordered.length - 1)].name;
+}
+
 export type ConcessionForm = StudentForm & {
-  nextSession: string; officeSession: string; classTeacher: string | null; lastDate: string
+  nextSession: string; officeSession: string; classTeacher: string | null; lastDate: string; nextClass: string | null
   concessions: { head: string; text: string; category: string | null }[]
 }
 
@@ -192,7 +200,7 @@ export function concessionFormPdf(f: ConcessionForm) {
     head(doc, f.school, `CONCESSION RE-APPLICATION · session ${f.nextSession}`);
     rows(doc, [
       ['Name of the pupil', title(f.s.name)], ['Admission No.', f.s.admissionNo], ['Date of birth', dmy(f.s.dob)],
-      ['Aadhaar', f.s.aadhaar], ['Present class', f.className], ['Class teacher', f.classTeacher],
+      ['Aadhaar', f.s.aadhaar], ['Present class', f.className], ['Class for next session', f.nextClass], ['Class teacher', f.classTeacher],
       ["Father's name", title(f.s.fatherName)], ["Mother's name", title(f.s.motherName)],
       ['Mobile', f.s.phone], ['Address', f.s.address],
       ['Current concession', f.concessions.map((c) => `${c.head}: ${c.text}${c.category ? ` (${c.category})` : ''}`).join('; ')],

@@ -7,9 +7,10 @@ type Tx = Prisma.TransactionClient;
 type Bill = Awaited<ReturnType<BillingService['build']>>;
 
 // Which refundable head is which deposit: type REFUNDABLE plus the name. Anything else (e.g. a "Library Deposit")
-// is left alone. Transport security is not auto-created: v2 bills no security head, so there is no rule to follow.
+// is left alone. A head named like 'security' is the transport security deposit (billed by bill.ts only to students
+// on transport, once; refund it through the deposit refund endpoint when transport stops).
 export const depositKind = (headName: string): DepositKind | null =>
-  /advance/i.test(headName) ? 'ADVANCE' : /caution/i.test(headName) ? 'CAUTION' : null;
+  /advance/i.test(headName) ? 'ADVANCE' : /caution/i.test(headName) ? 'CAUTION' : /security/i.test(headName) ? 'TRANSPORT' : null;
 
 // The voucher kind that pays out each deposit kind.
 export const voucherKindOf = (k: DepositKind) => (k === 'ADVANCE' ? 'ADVANCE_REFUND' : k === 'CAUTION' ? 'CAUTION_REFUND' : null);

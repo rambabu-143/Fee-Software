@@ -97,6 +97,11 @@ export class RenewalsController {
         } else if (next?.transport) {
           await tx.transportAssignment.delete({ where: { id: next.transport.id } });
         } else note = next ? 'No transport next year; nothing to stop' : 'No next-year enrollment; nothing to stop';
+        if (r.type === 'WITHDRAW') {
+          // Transport stopped: the security deposit is not refunded automatically; point staff at the refund.
+          const held = await tx.deposit.findFirst({ where: { studentId: r.enrollment.studentId, kind: 'TRANSPORT', status: 'HELD' } });
+          if (held) note = `${note ? `${note}. ` : ''}Transport security ₹${held.amount.toFixed(2)} is still held: refund it from Deposits`;
+        }
         await tx.transportRenewal.update({ where: { id: r.id }, data: { status, note, appliedAt: new Date() } });
         return { id: r.id, status, note };
       });

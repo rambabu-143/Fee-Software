@@ -1,5 +1,5 @@
 import {
-  BadRequestException, Body, Controller, Get, Header, Param, ParseDatePipe, ParseIntPipe, Post, Query, StreamableFile,
+  BadRequestException, Body, Controller, Get, Header, Param, ParseDatePipe, ParseIntPipe, Patch, Post, Query, StreamableFile,
 } from '@nestjs/common';
 import {
   IsDateString, IsEnum, IsIn, IsInt, IsNumber, IsOptional, IsString, Min, MinLength, ValidateIf,
@@ -31,6 +31,11 @@ class ReconcileDto {
   @IsIn(['CLEARED', 'BOUNCED']) status: 'CLEARED' | 'BOUNCED';
   @ValidateIf((o) => o.status === 'CLEARED' || o.bankDate !== undefined) @IsDateString() bankDate?: string;
   @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) bounceCharge?: number;
+}
+
+class BounceChargeDto {
+  @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) bounceCharge: number;
+  @IsString() @MinLength(3) reason: string;
 }
 
 class CancelPaymentDto {
@@ -250,6 +255,41 @@ export class PaymentsController {
         data: dto.status === 'CLEARED'
           ? { clearStatus: 'CLEARED', bankDate }
           : { clearStatus: 'BOUNCED', bouncedAt: new Date(), bankDate, bounceCharge: dto.bounceCharge },
+        include: receiptInclude,
+      });
+    });
+    return present(updated);
+  }
+
+  // Correct or waive (0) the bounce charge of a bounced receipt after the fact. Money already paid against bounce
+  // charges is tracked per student-year (PaymentAllocation.bounce), not per receipt, so the guard is on the total:
+  // the charges of all this student's bounced receipts may not drop below what was already paid.
+  @Roles('ADMIN')
+  @Patch(':id/bounce-charge')
+  async bounceCharge(@CurrentUser() u: AuthUser, @Param('id', ParseIntPipe) id: number, @Body() dto: BounceChargeDto) {
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const p = await tx.payment.findUniqueOrThrow({ where: { id } });
+      assertSchool(u, p.schoolId);
+      const e = await tx.enrollment.findUniqueOrThrow({ where: { studentId_yearId: { studentId: p.studentId, yearId: p.yearId } } });
+      await tx.$queryRaw`SELECT id FROM "Enrollment" WHERE id = ${e.id} FOR UPDATE`; // same lock as collect/cancel/reconcile
+      const cur = await tx.payment.findUniqueOrThrow({ where: { id } });
+      if (cur.clearStatus !== 'BOUNCED' || cur.cancelledAt) throw new BadRequestException('Only a bounced receipt has a bounce charge');
+      const others = await tx.payment.aggregate({
+        where: { studentId: cur.studentId, yearId: cur.yearId, clearStatus: 'BOUNCED', cancelledAt: null, id: { not: id } },
+        _sum: { bounceCharge: true },
+      });
+      const paid = await tx.paymentAllocation.aggregate({
+        where: { payment: { studentId: cur.studentId, yearId: cur.yearId, cancelledAt: null, clearStatus: { not: 'BOUNCED' } } },
+        _sum: { bounce: true },
+      });
+      const total = toPaise((others._sum.bounceCharge ?? 0).toString()) + toPaise(String(dto.bounceCharge));
+      const paidP = toPaise((paid._sum.bounce ?? 0).toString());
+      if (total < paidP) {
+        throw new BadRequestException(`Bounce charges cannot go below the ₹${fromPaise(paidP)} already paid against them`);
+      }
+      return tx.payment.update({
+        where: { id },
+        data: { bounceCharge: fromPaise(toPaise(String(dto.bounceCharge))), bounceChargeNote: dto.reason },
         include: receiptInclude,
       });
     });

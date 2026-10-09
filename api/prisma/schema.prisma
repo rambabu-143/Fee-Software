@@ -245,6 +245,7 @@ model Payment {
   clearStatus  ClearStatus         @default(CLEARED)
   bouncedAt    DateTime?
   bounceCharge Decimal?            @db.Decimal(12, 2)
+  bounceChargeNote String? // why an ADMIN last edited/waived the bounce charge
   deposits     Deposit[]
 
   @@unique([schoolId, yearId, receiptNo])

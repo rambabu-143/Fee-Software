@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "check:perms": "node scripts/check-permissions.mjs"
+    "check:perms": "node scripts/check-permissions.mjs",
+    "test:ui": "playwright test"
   },
   "dependencies": {
     "@types/qrcode": "^1.5.6",
@@ -19,6 +20,7 @@
     "react-router-dom": "^7.18.4"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.0",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
